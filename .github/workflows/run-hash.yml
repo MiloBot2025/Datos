@@ -1,9 +1,9 @@
-name: HashComparativo (AR business hours)
+name: HashComparativo (test sin guardia)
 
 on:
   schedule:
-    - cron: "*/20 * * * *"   # cada 20 minutos
-  workflow_dispatch:
+    - cron: "*/20 * * * *"   # opcional: cada 20 min
+  workflow_dispatch:         # botón "Run workflow"
 
 permissions:
   contents: write
@@ -21,44 +21,25 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Guard de horario (Lun-Vie 08:00–21:00 AR)
-        id: guard
-        run: |
-          sudo timedatectl set-timezone "$TZ"
-          DOW=$(date +%u)
-          H=$(date +%H)
-          if [ "$DOW" -gt 5 ]; then echo "run=no" >> $GITHUB_OUTPUT; exit 0; fi
-          if [ "$H" -lt 8 ] || [ "$H" -ge 21 ]; then echo "run=no" >> $GITHUB_OUTPUT; exit 0; fi
-          echo "run=yes" >> $GITHUB_OUTPUT
-
-      - name: Stop early if out of window
-        if: steps.guard.outputs.run != 'yes'
-        run: echo "Fuera de ventana, no-op."
-
       - name: Set up Python
-        if: steps.guard.outputs.run == 'yes'
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Install Google Chrome
-        if: steps.guard.outputs.run == 'yes'
         uses: browser-actions/setup-chrome@v1
 
       - name: Install system deps
-        if: steps.guard.outputs.run == 'yes'
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb
+          sudo apt-get install -y xvfb rsync
 
       - name: Install Python deps
-        if: steps.guard.outputs.run == 'yes'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
       - name: Run script
-        if: steps.guard.outputs.run == 'yes'
         env:
           IMSA_PASSWORD: ${{ secrets.IMSA_PASSWORD }}
           WORKDIR: ${{ env.WORKDIR }}
@@ -66,14 +47,14 @@ jobs:
           set -e
           python hash_comparativo.py || true
 
-          # preparar estructura para Pages
+          # preparar contenido para Pages
           mkdir -p "$WORKDIR/site/public_reports" "$WORKDIR/site/public_listas"
 
-          # copiar si existen archivos; si no, que no falle
+          # copiar si existen archivos (no fallar si no hay)
           rsync -av --ignore-missing-args "$WORKDIR/_reports/" "$WORKDIR/site/public_reports/" || true
           rsync -av --ignore-missing-args "$WORKDIR/public_listas/" "$WORKDIR/site/public_listas/" || true
 
-          # generar index.html minimal en bash (sin Python inline)
+          # index.html simple (bash)
           NOW="$(date -u +%FT%TZ)"
           {
             echo '<!doctype html>'
@@ -102,7 +83,6 @@ jobs:
           } > "$WORKDIR/site/index.html"
 
       - name: Upload artifacts (debug)
-        if: steps.guard.outputs.run == 'yes'
         uses: actions/upload-artifact@v4
         with:
           name: resultados-${{ github.run_id }}
@@ -110,11 +90,11 @@ jobs:
             ${{ env.WORKDIR }}/_reports/*.xlsx
             ${{ env.WORKDIR }}/public_listas/*.xlsx
             ${{ env.WORKDIR }}/SUMMARY.md
+            ${{ env.WORKDIR }}/site/index.html
           if-no-files-found: warn
           retention-days: 7
 
       - name: Persist snapshots & hashes
-        if: steps.guard.outputs.run == 'yes'
         run: |
           mkdir -p persist
           rsync -av "$WORKDIR/_hashdb/" persist/_hashdb/ || true
@@ -126,7 +106,6 @@ jobs:
           git push
 
       - name: Deploy to GitHub Pages
-        if: steps.guard.outputs.run == 'yes'
         uses: peaceiris/actions-gh-pages@v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -134,22 +113,5 @@ jobs:
           publish_branch: gh-pages
           force_orphan: true
 
-      # Bloque de email desactivado por ahora (no hay SMTP)
-      # - name: Send email on changes
-      #   if: steps.guard.outputs.run == 'yes' && hashFiles('${{ env.WORKDIR }}/CHANGES_FLAG') != ''
-      #   uses: dawidd6/action-send-mail@v3
-      #   with:
-      #     server_address: ${{ secrets.SMTP_SERVER }}
-      #     server_port: ${{ secrets.SMTP_PORT }}
-      #     username: ${{ secrets.SMTP_USERNAME }}
-      #     password: ${{ secrets.SMTP_PASSWORD }}
-      #     from: ${{ secrets.SMTP_USERNAME }}
-      #     to: ${{ secrets.EMAIL_TO }}
-      #     subject: "Cambios detectados en listas ({{ date }})"
-      #     html_body: "<p>Se detectaron cambios. Ver SUMMARY.md y la web de Pages.</p>"
-      #     attachments: ${{ env.WORKDIR }}/SUMMARY.md
-      #     secure: true
-
       - name: Cleanup change flag
-        if: steps.guard.outputs.run == 'yes'
         run: rm -f "${{ env.WORKDIR }}/CHANGES_FLAG" || true
