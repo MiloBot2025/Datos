@@ -2,7 +2,7 @@ name: HashComparativo (AR business hours)
 
 on:
   schedule:
-    - cron: "*/20 * * * *"
+    - cron: "*/20 * * * *"   # cada 20 minutos
   workflow_dispatch:
 
 permissions:
@@ -41,6 +41,10 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Install Google Chrome
+        if: steps.guard.outputs.run == 'yes'
+        uses: browser-actions/setup-chrome@v1
+
       - name: Install system deps
         if: steps.guard.outputs.run == 'yes'
         run: |
@@ -64,3 +68,76 @@ jobs:
           rsync -av $WORKDIR/_reports/*.xlsx $WORKDIR/site/public_reports/ || true
           rsync -av $WORKDIR/public_listas/*.xlsx $WORKDIR/site/public_listas/ || true
           python - << 'PY'
+import pathlib, datetime
+base = pathlib.Path("${{ env.WORKDIR }}")
+pub  = base / "site"
+pub.mkdir(parents=True, exist_ok=True)
+def links(dirpath, title):
+    rows=[]
+    for p in sorted((pub/dirpath).glob("*")):
+        if p.is_file():
+            sz=p.stat().st_size//1024
+            rows.append(f'<li><a href="{dirpath}/{p.name}">{p.name}</a> — {sz} KB</li>')
+    return f"<h2>{title}</h2><ul>{''.join(rows) or '<li>(vacío)</li>'}</ul>"
+html=f"""<!doctype html>
+<meta charset="utf-8">
+<title>Listas y Reportes</title>
+<h1>Listas y Reportes</h1>
+<p>Última actualización: {datetime.datetime.utcnow().isoformat()}Z</p>
+{links('public_reports','Reportes de cambios')}
+{links('public_listas','Últimas “Hoja 1”')}
+"""
+(pub/"index.html").write_text(html, encoding="utf-8")
+PY
+
+      - name: Upload artifacts (debug)
+        if: steps.guard.outputs.run == 'yes'
+        uses: actions/upload-artifact@v4
+        with:
+          name: resultados-${{ github.run_id }}
+          path: |
+            ${{ env.WORKDIR }}/_reports/*.xlsx
+            ${{ env.WORKDIR }}/public_listas/*.xlsx
+            ${{ env.WORKDIR }}/SUMMARY.md
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Persist snapshots & hashes
+        if: steps.guard.outputs.run == 'yes'
+        run: |
+          mkdir -p persist
+          rsync -av ${{ env.WORKDIR }}/_hashdb/ persist/_hashdb/ || true
+          rsync -av ${{ env.WORKDIR }}/_snapshots/ persist/_snapshots/ || true
+          git config user.name "actions-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add persist || true
+          git commit -m "ci: update snapshots [skip ci]" || echo "No changes"
+          git push
+
+      - name: Deploy to GitHub Pages
+        if: steps.guard.outputs.run == 'yes'
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ${{ env.WORKDIR }}/site
+          publish_branch: gh-pages
+          force_orphan: true
+
+      - name: Send email on changes
+        if: steps.guard.outputs.run == 'yes' && hashFiles('${{ env.WORKDIR }}/CHANGES_FLAG') != ''
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_SERVER }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          from: ${{ secrets.SMTP_USERNAME }}
+          to: ${{ secrets.EMAIL_TO }}
+          subject: "Cambios detectados en listas ({{ date }})"
+          html_body: "<p>Se detectaron cambios. Ver SUMMARY.md adjunto y la web de Pages.</p>"
+          attachments: ${{ env.WORKDIR }}/SUMMARY.md
+          secure: true
+
+      - name: Cleanup change flag
+        if: steps.guard.outputs.run == 'yes'
+        run: rm -f ${{ env.WORKDIR }}/CHANGES_FLAG || true
