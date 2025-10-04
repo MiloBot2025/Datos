@@ -1,14 +1,12 @@
-# hash_comparativo.py  — descargas, hoja1 y reporte de cambios (CI-ready)
-
-from __future__ import annotations
+# hash_comparativo.py — Descargas, Hoja 1 y reporte de cambios (baseline diaria + cooldown)
 
 import csv
+import os
 import time
 import hashlib
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, Any, List, Tuple
-import os
 
 import requests
 from openpyxl import load_workbook, Workbook
@@ -19,41 +17,43 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
 
-# ========= CONFIG (paths portables p/CI) =========
-BASE_DIR = Path(os.getenv("WORKDIR", "."))
+# ========= CONFIG =========
+# WORKDIR: si existe variable de entorno (GitHub Actions), úsala; si no, la carpeta Descargas local.
+RUTA_DESCARGA = Path(os.environ.get("WORKDIR", str(Path.home() / "Downloads"))).resolve()
+RUTA_DESCARGA.mkdir(parents=True, exist_ok=True)
 
-RUTA_DESCARGA = BASE_DIR / "downloads"
-HASH_DB_DIR   = BASE_DIR / "_hashdb"
-SNAP_DIR      = BASE_DIR / "_snapshots"
-REPORTS_DIR   = BASE_DIR / "_reports"
+# directorios (algunos históricos para compatibilidad; los de hash/snap ya no se usan)
+HASH_DB_DIR = RUTA_DESCARGA / "_hashdb"
+HASH_DB_DIR.mkdir(parents=True, exist_ok=True)
+SNAP_DIR = RUTA_DESCARGA / "_snapshots"
+SNAP_DIR.mkdir(parents=True, exist_ok=True)
 
-# carpetas que publicamos en GitHub Pages
-PUBLIC_REPORTS_DIR = BASE_DIR / "public_reports"
-PUBLIC_LISTAS_DIR  = BASE_DIR / "public_listas"
+REPORTS_DIR = RUTA_DESCARGA / "_reports"
+REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
-for d in (RUTA_DESCARGA, HASH_DB_DIR, SNAP_DIR, REPORTS_DIR, PUBLIC_REPORTS_DIR, PUBLIC_LISTAS_DIR):
-    d.mkdir(parents=True, exist_ok=True)
+PUBLIC_LISTAS_DIR = RUTA_DESCARGA / "public_listas"
+PUBLIC_LISTAS_DIR.mkdir(parents=True, exist_ok=True)
 
-# Si el hash es igual al previo → se elimina el archivo recién bajado (configurable por ENV).
-BORRAR_DUPLICADO = os.getenv("BORRAR_DUPLICADO", "true").lower() == "true"
+# Si el hash es igual al previo → se elimina el archivo recién bajado. (YA NO lo usamos)
+# Por la nueva política pediste **conservar siempre el original**:
+BORRAR_DUPLICADO = False
 
-# URLs fuentes
+# URLs de proveedores
 URL_TEVELAM = "https://drive.google.com/uc?export=download&id=1hPH3VwQDtMgx_AkC5hFCUbM2MEiwBEpT"
 URL_DISCO_PRO = "https://drive.google.com/uc?id=1-aQ842Dq3T1doA-Enb34iNNzenLGkVkr&export=download"
 URL_PROVEEDOR_EXTRA = "https://docs.google.com/uc?id=1JnUnrpZUniTXUafkAxCInPG7O39yrld5&export=download"
 
-# IMSA con login embebido en iframe
 IMSA_URL = "https://listaimsa.com.ar/lista-de-precios/"
-IMSA_PASSWORD = os.getenv("IMSA_PASSWORD", "lista2021")
+# lee la contraseña desde el entorno si está (en Actions usamos un secret), si no, usa el valor por defecto
+IMSA_PASSWORD = os.environ.get("IMSA_PASSWORD", "lista2021")
 
 REQ_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 TIMEOUT = 60
 
 # IMSA: incluir TODO para analizar precio aunque no haya stock
-IMSA_SOLO_CON_STOCK = os.getenv("IMSA_SOLO_CON_STOCK", "false").lower() == "true"
-IMSA_BORRAR_ORIGINAL = os.getenv("IMSA_BORRAR_ORIGINAL", "false").lower() == "true"
+IMSA_SOLO_CON_STOCK = False
+IMSA_BORRAR_ORIGINAL = False  # nunca borrar el original tras procesar
 
 # ========= LOG / UTILS =========
 def log(msg: str) -> None:
@@ -62,52 +62,55 @@ def log(msg: str) -> None:
 def ts() -> str:
     return datetime.now().strftime("%Y%m%d_%H%M%S")
 
-# ========= HASH =========
+# ========= BASELINE DIARIA / COOLDOWN (sin DB histórica) =========
+def _today_key() -> str:
+    # El runner usa TZ configurada por el workflow; localmente usa la del SO
+    return datetime.now().strftime("%Y%m%d")
+
+DAILY_DIR = RUTA_DESCARGA / "_daily"   # p.ej. run_out/_daily/20251004/…
+DAILY_DIR.mkdir(parents=True, exist_ok=True)
+
+def daily_paths(source_key: str) -> Tuple[Path, Path, Path]:
+    """
+    baseline.csv y .lock por proveedor y día.
+    Además, una carpeta por día para guardar originales.
+    """
+    day_dir = DAILY_DIR / _today_key()
+    day_dir.mkdir(parents=True, exist_ok=True)
+    originals_dir = day_dir / "_originals"
+    originals_dir.mkdir(parents=True, exist_ok=True)
+    baseline = day_dir / f"{source_key}_baseline.csv"
+    lock = day_dir / f"{source_key}.lock"
+    return baseline, lock, originals_dir
+
+def write_baseline_csv(baseline: Path, registros: List[Dict[str, Any]]) -> None:
+    with baseline.open("w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["ID","Precio","Moneda"])
+        for r in registros:
+            w.writerow([r.get("ID"), r.get("Precio"), r.get("Moneda")])
+
+def read_baseline_csv(baseline: Path) -> Dict[str, Dict[str, Any]]:
+    if not baseline.exists():
+        return {}
+    out: Dict[str, Dict[str, Any]] = {}
+    with baseline.open("r", newline="", encoding="utf-8") as f:
+        rd = csv.DictReader(f)
+        for row in rd:
+            try:
+                p = float(row["Precio"]) if row["Precio"] not in (None, "", "None") else None
+            except Exception:
+                p = None
+            out[row["ID"]] = {"Precio": p, "Moneda": row.get("Moneda") or None}
+    return out
+
+# ========= HASH (quedan helpers por compatibilidad/debug; no definen el flujo) =========
 def file_sha256(path: Path, chunk_size: int = 1024 * 1024) -> str:
     h = hashlib.sha256()
     with path.open('rb') as f:
         for chunk in iter(lambda: f.read(chunk_size), b''):
             h.update(chunk)
     return h.hexdigest()
-
-def _hash_path(source_key: str) -> Path:
-    return HASH_DB_DIR / f"{source_key}.sha256"
-
-def read_prev_hash(source_key: str) -> Optional[str]:
-    p = _hash_path(source_key)
-    if p.exists():
-        try:
-            return p.read_text(encoding='utf-8').strip()
-        except Exception:
-            return None
-    return None
-
-def write_hash(source_key: str, hexhash: str) -> None:
-    _hash_path(source_key).write_text(hexhash, encoding='utf-8')
-
-def decide_should_process(source_key: str, path: Optional[Path]) -> bool:
-    if not path or not path.exists():
-        log(f"⏭️ {source_key}: no hay archivo para comparar.")
-        return False
-    try:
-        new_hash = file_sha256(path)
-        prev_hash = read_prev_hash(source_key)
-        log(f"📇 {source_key}: nuevo={new_hash[:12]}… | previo={(prev_hash[:12] + '…') if prev_hash else 'N/A'}")
-        if prev_hash == new_hash:
-            log(f"⏭️ {source_key}: sin cambios (hash igual) → omito y borro descarga.")
-            if BORRAR_DUPLICADO:
-                try:
-                    path.unlink(missing_ok=True)
-                    log(f"🗑️ {source_key}: duplicado eliminado: {path.name}")
-                except Exception as e:
-                    log(f"⚠️ {source_key}: no se pudo borrar duplicado: {e}")
-            return False
-        write_hash(source_key, new_hash)
-        log(f"🔄 {source_key}: cambios detectados (hash distinto) → conservo y proceso.")
-        return True
-    except Exception as e:
-        log(f"⚠️ {source_key}: error comparando hash: {e} → por las dudas conservo y proceso.")
-        return True
 
 # ========= DESCARGAS =========
 def download_simple(url: str, base_name: str) -> Optional[Path]:
@@ -184,7 +187,7 @@ def extraer_registros_generico_xlsx(path: Path,
         wb.close()
     return out
 
-# Para "Hoja 1" (como antes) necesitamos STOCK
+# Para "Hoja 1" necesitamos STOCK
 def convertir_stock_generico(valor):
     t = _norm_text_lc(valor)
     if t in {"sin stock","sinstock","sin-stock","no","0","agotado","sin"}:
@@ -218,7 +221,7 @@ def extraer_registros_con_stock_fallback(path: Path, fila_inicio: int, col_stock
                 out.append({"ID": _norm_text(cod), "Stock": convertir_stock_generico(stock_raw),
                             "Precio": try_float(precio), "Moneda": _norm_text(moneda) or None})
         else:
-            # Fallback histórico
+            # Fallback histórico (como “antes”)
             max_row = ws.max_row or 1
             for r in range(fila_inicio, max_row + 1):
                 cod = ws.cell(row=r, column=1).value
@@ -390,7 +393,7 @@ def extraer_imsa(path: Path) -> List[Dict[str, Any]]:
         wb_in.close()
     return out
 
-# ========= SNAPSHOTS (ID, Precio, Moneda) =========
+# ========= SNAPSHOTS (histórico) — ya no se usan, pero dejamos helpers si hiciera falta =========
 def _snap_path(source_key: str) -> Path:
     return SNAP_DIR / f"{source_key}_snapshot.csv"
 
@@ -511,24 +514,9 @@ def crear_libro_cambios(source_key: str,
     out = REPORTS_DIR / f"{source_key}_DIFF_{ts()}.xlsx"
     wb.save(out)
     log(f"🧾 Reporte generado: {out.name}")
-
-    # ====== BANDERA y RESUMEN PARA EMAIL + PUBLICACIÓN ======
-    (BASE_DIR / "CHANGES_FLAG").write_text("1", encoding="utf-8")
-    with (BASE_DIR / "SUMMARY.md").open("a", encoding="utf-8") as f:
-        f.write(f"## {source_key}\n")
-        f.write(f"- Precios ↑: {cnt_up} | Suma Δ: {sum_up}\n")
-        f.write(f"- Precios ↓: {cnt_dn} | Suma Δ: {sum_dn}\n")
-        f.write(f"- Nuevos: {cnt_new} | Eliminados: {cnt_del}\n\n")
-
-    # copia también a carpeta pública para Pages
-    try:
-        (PUBLIC_REPORTS_DIR / out.name).write_bytes(out.read_bytes())
-    except Exception as e:
-        log(f"⚠️ No se pudo copiar reporte a public_reports: {e}")
-
     return out
 
-# ========= SALIDA “Hoja 1” (siempre, igual que antes) =========
+# ========= SALIDA “Hoja 1” =========
 def guardar_hoja1_xlsx(path_base: Path, registros: List[Dict[str, Any]], nombre_salida: Optional[str] = None) -> Path:
     wb_out = Workbook(write_only=True)
     h1 = wb_out.create_sheet("Hoja 1")
@@ -541,28 +529,20 @@ def guardar_hoja1_xlsx(path_base: Path, registros: List[Dict[str, Any]], nombre_
     h1.append(["ID","Stock","Precio","Moneda"])
     for r in registros:
         h1.append([r.get("ID"), r.get("Stock"), r.get("Precio"), r.get("Moneda")])
-    out = path_base.with_name(path_base.stem + (nombre_salida or "_HOJA1") + ".xlsx")
+    out = (PUBLIC_LISTAS_DIR / (path_base.stem + (nombre_salida or "_HOJA1") + ".xlsx"))
     wb_out.save(out)
     log(f"✅ {path_base.stem} → {out.name}")
-
-    # Copia la última "Hoja 1" a carpeta pública (una por fuente)
-    try:
-        safe = f"{path_base.stem}_ULTIMA.xlsx"
-        (PUBLIC_LISTAS_DIR / safe).write_bytes(out.read_bytes())
-    except Exception as e:
-        log(f"⚠️ No se pudo copiar Hoja 1 a public_listas: {e}")
-
     return out
 
-# ========= SELENIUM (headless, CI-friendly) =========
+# ========= IMSA (Selenium) =========
 def _build_chrome() -> webdriver.Chrome:
     chrome_options = Options()
-    chrome_options.add_argument("--headless=new")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-blink-features=AutomationControlled")
     chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    chrome_options.add_argument("--window-size=1920,1080")
+    chrome_options.add_argument("--start-maximized")
+    # en CI
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
     prefs = {
         "download.default_directory": str(RUTA_DESCARGA),
         "download.prompt_for_download": False,
@@ -570,7 +550,7 @@ def _build_chrome() -> webdriver.Chrome:
         "safebrowsing.enabled": True,
     }
     chrome_options.add_experimental_option("prefs", prefs)
-    service = Service(ChromeDriverManager().install())
+    service = Service()  # Selenium Manager resuelve el driver
     return webdriver.Chrome(service=service, options=chrome_options)
 
 def _close_driver(driver: webdriver.Chrome):
@@ -590,7 +570,6 @@ def _find_recent_listaimsa(max_age_sec: int = 180) -> Optional[Path]:
         try: mtime = p.stat().st_mtime
         except Exception: continue
         if now - mtime <= max_age_sec:
-            # en Linux headless no siempre hay .crdownload; el chequeo es tolerante
             if (RUTA_DESCARGA / (p.name + ".crdownload")).exists():
                 continue
             candidatos.append(p)
@@ -644,9 +623,9 @@ def descargar_imsa_web() -> Optional[Path]:
             _close_driver(driver)
             log("🧹 Selenium cerrado.")
 
-# ========= MAIN =========
+# ========= MAIN (con baseline diaria + cooldown) =========
 if __name__ == "__main__":
-    log("INICIO ULTRA + HASH (borrar duplicados) + HOJA1 + DIFERENCIAS (precios/modelos)")
+    log("INICIO (baseline diaria + cooldown por proveedor)")
 
     # 1) DESCARGAS
     try:
@@ -677,9 +656,9 @@ if __name__ == "__main__":
     except Exception as e:
         log(f"ERROR flujo IMSA: {e}"); imsa = None
 
-    # 2) HASH & PROCESO
-    log("Comparando hashes y generando salidas…")
-    omitidos = []
+    # 2) PROCESO (Hoja1 + diffs vs baseline diaria + cooldown)
+    log("Procesando y generando salidas…")
+    omitidos: List[str] = []
 
     def guardar_hoja1(path: Path, registros: List[Dict[str, Any]]):
         guardar_hoja1_xlsx(path, registros)
@@ -688,41 +667,72 @@ if __name__ == "__main__":
                    extractor_diffs, extractor_hoja1):
         if not path:
             return
-        if decide_should_process(source_key, path):
-            # A) HOJA 1 (SIEMPRE)
-            try:
-                regs_h1 = extractor_hoja1(path)
-                guardar_hoja1(path, regs_h1)
-            except Exception as e:
-                log(f"⚠️ {source_key}: error generando Hoja 1: {e}")
 
-            # B) DIFERENCIAS (precios/modelos) y libro condicional
-            try:
-                regs = extractor_diffs(path)
-                prev = cargar_snapshot(source_key)
-                precios_up, precios_dn, nuevos, eliminados = calcular_diffs(prev, regs)
-                if hay_cambios(precios_up, precios_dn, nuevos, eliminados):
-                    _ = crear_libro_cambios(source_key, precios_up, precios_dn, nuevos, eliminados)
-                else:
-                    log(f"ℹ️ {source_key}: hubo hash nuevo pero sin cambios de precio/modelos → no se genera libro.")
-                guardar_snapshot(source_key, regs)
-            except Exception as e:
-                log(f"⚠️ {source_key}: error calculando/generando diffs: {e}")
-        else:
+        baseline_path, lock_path, originals_dir = daily_paths(source_key)
+
+        # Siempre conservar el original también dentro del día (para auditoría rápida)
+        try:
+            if path and path.exists():
+                target_copy = originals_dir / path.name
+                if not target_copy.exists():
+                    target_copy.write_bytes(path.read_bytes())
+        except Exception as e:
+            log(f"⚠️ {source_key}: no se pudo copiar original del día: {e}")
+
+        # Cooldown diario: si ya hubo cambios hoy, no procesamos más
+        if lock_path.exists():
+            log(f"⏭️ {source_key}: cooldown activo (ya hubo cambios hoy) → omito hasta mañana 07:00.")
             omitidos.append(source_key)
+            return
 
-    if tevelam: run_fuente("Tevelam", tevelam, extraer_tevelam,        extraer_tevelam_hoja1)
-    if disco:   run_fuente("Disco_Pro", disco, extraer_disco,          extraer_disco_hoja1)
-    if extra:   run_fuente("ARS_Tech", extra, extraer_proveedor_extra, extraer_extra_hoja1)
-    if imsa:    run_fuente("IMSA", imsa,    extraer_imsa,             extraer_imsa_hoja1)
+        # A) HOJA 1 (siempre)
+        try:
+            regs_h1 = extractor_hoja1(path)
+            guardar_hoja1(path, regs_h1)
+        except Exception as e:
+            log(f"⚠️ {source_key}: error generando Hoja 1: {e}")
+
+        # B) Diffs contra baseline diaria
+        try:
+            curr_regs = extractor_diffs(path)
+
+            if not baseline_path.exists():
+                write_baseline_csv(baseline_path, curr_regs)
+                log(f"📌 {source_key}: baseline diaria creada ({baseline_path.name}). No hay reporte en esta primera pasada.")
+                return
+
+            prev_snap = read_baseline_csv(baseline_path)
+            precios_up, precios_dn, nuevos, eliminados = calcular_diffs(prev_snap, curr_regs)
+
+            if hay_cambios(precios_up, precios_dn, nuevos, eliminados):
+                _ = crear_libro_cambios(source_key, precios_up, precios_dn, nuevos, eliminados)
+                # marcamos cooldown para no volver a procesar hoy
+                lock_path.touch()
+                # actualizamos la baseline a la última versión del día (opcional)
+                write_baseline_csv(baseline_path, curr_regs)
+                # bandera para email/web si querés usarla en el workflow
+                try:
+                    (RUTA_DESCARGA / "CHANGES_FLAG").write_text("1", encoding="utf-8")
+                except Exception:
+                    pass
+                log(f"✅ {source_key}: cambios detectados → cooldown hasta mañana 07:00.")
+            else:
+                log(f"ℹ️ {source_key}: sin cambios vs baseline de hoy → no se genera libro.")
+        except Exception as e:
+            log(f"⚠️ {source_key}: error calculando/generando diffs: {e}")
+
+    if tevelam: run_fuente("Tevelam",   tevelam, extraer_tevelam,        extraer_tevelam_hoja1)
+    if disco:   run_fuente("Disco_Pro", disco,   extraer_disco,          extraer_disco_hoja1)
+    if extra:   run_fuente("ARS_Tech",  extra,   extraer_proveedor_extra, extraer_extra_hoja1)
+    if imsa:    run_fuente("IMSA",      imsa,    extraer_imsa,            extraer_imsa_hoja1)
 
     # 3) RESUMEN
     log("================ RESUMEN ================")
     if omitidos:
-        log("Omitidos por hash igual (descarga borrada):")
+        log("Omitidos por cooldown activo (ya hubo cambios hoy):")
         for n in omitidos:
             log(f"  • {n}")
     else:
-        log("No hubo fuentes omitidas por hash igual.")
+        log("No hubo fuentes omitidas por cooldown.")
 
     log(f"FIN en: {RUTA_DESCARGA}")
