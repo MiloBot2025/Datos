@@ -63,36 +63,43 @@ jobs:
           IMSA_PASSWORD: ${{ secrets.IMSA_PASSWORD }}
           WORKDIR: ${{ env.WORKDIR }}
         run: |
+          set -e
           python hash_comparativo.py || true
+
+          # preparar estructura para Pages
           mkdir -p "$WORKDIR/site/public_reports" "$WORKDIR/site/public_listas"
-          rsync -av "$WORKDIR/_reports/" "$WORKDIR/site/public_reports/" || true
-          rsync -av "$WORKDIR/public_listas/" "$WORKDIR/site/public_listas/" || true
-          python - <<'PY'
-import pathlib, datetime, os
-base = pathlib.Path(os.environ["WORKDIR"])
-pub  = base / "site"
-(pub / "public_reports").mkdir(parents=True, exist_ok=True)
-(pub / "public_listas").mkdir(parents=True, exist_ok=True)
 
-def links(sub, title):
-    ul = []
-    for p in sorted((pub/sub).glob("*")):
-        if p.is_file():
-            size_kb = p.stat().st_size // 1024
-            ul.append(f'<li><a href="{sub}/{p.name}">{p.name}</a> — {size_kb} KB</li>')
-    if not ul: ul.append("<li>(vacío)</li>")
-    return f"<h2>{title}</h2><ul>{''.join(ul)}</ul>"
+          # copiar si existen archivos; si no, que no falle
+          rsync -av --ignore-missing-args "$WORKDIR/_reports/" "$WORKDIR/site/public_reports/" || true
+          rsync -av --ignore-missing-args "$WORKDIR/public_listas/" "$WORKDIR/site/public_listas/" || true
 
-html = f"""<!doctype html>
-<meta charset="utf-8">
-<title>Listas y Reportes</title>
-<h1>Listas y Reportes</h1>
-<p>Última actualización: {datetime.datetime.utcnow().isoformat()}Z</p>
-{links('public_reports','Reportes de cambios')}
-{links('public_listas','Últimas "Hoja 1"')}
-"""
-(pub / "index.html").write_text(html, encoding="utf-8")
-PY
+          # generar index.html minimal en bash (sin Python inline)
+          NOW="$(date -u +%FT%TZ)"
+          {
+            echo '<!doctype html>'
+            echo '<meta charset="utf-8"><title>Listas y Reportes</title>'
+            echo '<h1>Listas y Reportes</h1>'
+            echo "<p>Última actualización: ${NOW}</p>"
+            echo '<h2>Reportes de cambios</h2><ul>'
+            if compgen -G "$WORKDIR/site/public_reports/*" > /dev/null; then
+              for f in "$WORKDIR/site/public_reports/"*; do
+                b=$(basename "$f"); sz=$(( $(stat -c%s "$f") / 1024 ))
+                echo "<li><a href=\"public_reports/$b\">$b</a> — ${sz} KB</li>"
+              done
+            else
+              echo '<li>(vacío)</li>'
+            fi
+            echo '</ul><h2>Últimas "Hoja 1"</h2><ul>'
+            if compgen -G "$WORKDIR/site/public_listas/*" > /dev/null; then
+              for f in "$WORKDIR/site/public_listas/"*; do
+                b=$(basename "$f"); sz=$(( $(stat -c%s "$f") / 1024 ))
+                echo "<li><a href=\"public_listas/$b\">$b</a> — ${sz} KB</li>"
+              done
+            else
+              echo '<li>(vacío)</li>'
+            fi
+            echo '</ul>'
+          } > "$WORKDIR/site/index.html"
 
       - name: Upload artifacts (debug)
         if: steps.guard.outputs.run == 'yes'
@@ -127,20 +134,21 @@ PY
           publish_branch: gh-pages
           force_orphan: true
 
-      - name: Send email on changes
-        if: steps.guard.outputs.run == 'yes' && hashFiles('${{ env.WORKDIR }}/CHANGES_FLAG') != ''
-        uses: dawidd6/action-send-mail@v3
-        with:
-          server_address: ${{ secrets.SMTP_SERVER }}
-          server_port: ${{ secrets.SMTP_PORT }}
-          username: ${{ secrets.SMTP_USERNAME }}
-          password: ${{ secrets.SMTP_PASSWORD }}
-          from: ${{ secrets.SMTP_USERNAME }}
-          to: ${{ secrets.EMAIL_TO }}
-          subject: "Cambios detectados en listas ({{ date }})"
-          html_body: "<p>Se detectaron cambios. Ver SUMMARY.md adjunto y la web de Pages.</p>"
-          attachments: ${{ env.WORKDIR }}/SUMMARY.md
-          secure: true
+      # Bloque de email desactivado por ahora (no hay SMTP)
+      # - name: Send email on changes
+      #   if: steps.guard.outputs.run == 'yes' && hashFiles('${{ env.WORKDIR }}/CHANGES_FLAG') != ''
+      #   uses: dawidd6/action-send-mail@v3
+      #   with:
+      #     server_address: ${{ secrets.SMTP_SERVER }}
+      #     server_port: ${{ secrets.SMTP_PORT }}
+      #     username: ${{ secrets.SMTP_USERNAME }}
+      #     password: ${{ secrets.SMTP_PASSWORD }}
+      #     from: ${{ secrets.SMTP_USERNAME }}
+      #     to: ${{ secrets.EMAIL_TO }}
+      #     subject: "Cambios detectados en listas ({{ date }})"
+      #     html_body: "<p>Se detectaron cambios. Ver SUMMARY.md y la web de Pages.</p>"
+      #     attachments: ${{ env.WORKDIR }}/SUMMARY.md
+      #     secure: true
 
       - name: Cleanup change flag
         if: steps.guard.outputs.run == 'yes'
