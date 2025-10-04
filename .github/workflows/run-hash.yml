@@ -1,0 +1,66 @@
+name: HashComparativo (AR business hours)
+
+on:
+  schedule:
+    - cron: "*/20 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    env:
+      WORKDIR: ${{ github.workspace }}/run_out
+      TZ: America/Argentina/Buenos_Aires
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Guard de horario (Lun-Vie 08:00–21:00 AR)
+        id: guard
+        run: |
+          sudo timedatectl set-timezone "$TZ"
+          DOW=$(date +%u)
+          H=$(date +%H)
+          if [ "$DOW" -gt 5 ]; then echo "run=no" >> $GITHUB_OUTPUT; exit 0; fi
+          if [ "$H" -lt 8 ] || [ "$H" -ge 21 ]; then echo "run=no" >> $GITHUB_OUTPUT; exit 0; fi
+          echo "run=yes" >> $GITHUB_OUTPUT
+
+      - name: Stop early if out of window
+        if: steps.guard.outputs.run != 'yes'
+        run: echo "Fuera de ventana, no-op."
+
+      - name: Set up Python
+        if: steps.guard.outputs.run == 'yes'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install system deps
+        if: steps.guard.outputs.run == 'yes'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+
+      - name: Install Python deps
+        if: steps.guard.outputs.run == 'yes'
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run script
+        if: steps.guard.outputs.run == 'yes'
+        env:
+          IMSA_PASSWORD: ${{ secrets.IMSA_PASSWORD }}
+          WORKDIR: ${{ env.WORKDIR }}
+        run: |
+          python hash_comparativo.py || true
+          mkdir -p $WORKDIR/site/public_reports $WORKDIR/site/public_listas
+          rsync -av $WORKDIR/_reports/*.xlsx $WORKDIR/site/public_reports/ || true
+          rsync -av $WORKDIR/public_listas/*.xlsx $WORKDIR/site/public_listas/ || true
+          python - << 'PY'
