@@ -1,4 +1,5 @@
-# hash_comparativo.py — hash por archivo completo + base visible + gate diario + Hoja1 + difs precios
+# hash_comparativo.py — hash por archivo completo + base visible + gate diario
+# + Hoja1 + difs precios + ***REFRESCO DE HOJA1 DESDE LA BASE***
 from __future__ import annotations
 
 import csv
@@ -157,9 +158,8 @@ def skip_por_base_de_hoy(source_key: str) -> bool:
 # ========= DECISIÓN (HASH COMPLETO) =========
 def decide_should_process(source_key: str, path: Optional[Path]) -> bool:
     """
-    Comparación estricta por SHA-256 del BINARIO COMPLETO.
-    Si es distinto al último guardado en _hashdb → adoptamos como base y procesamos.
-    Si es igual → (opcionalmente borra descarga) y NO procesamos.
+    SHA-256 del BINARIO COMPLETO.
+    Si cambia → adoptamos base + procesamos. Si no cambia → NO procesamos (pero luego refrescamos Hoja1 desde base).
     """
     if not path or not path.exists():
         log(f"⏭️ {source_key}: no hay archivo para comparar.")
@@ -169,7 +169,7 @@ def decide_should_process(source_key: str, path: Optional[Path]) -> bool:
         prev_hash = read_prev_hash(source_key)
         log(f"📇 {source_key}: nuevo={new_hash[:12]}… | previo={(prev_hash[:12] + '…') if prev_hash else 'N/A'}")
         if prev_hash == new_hash:
-            log(f"⏭️ {source_key}: sin cambios (hash igual) → omito.")
+            log(f"⏭️ {source_key}: sin cambios (hash igual) → omito proceso (se refrescará Hoja1 desde base).")
             if BORRAR_DUPLICADO:
                 try:
                     path.unlink(missing_ok=True)
@@ -178,7 +178,6 @@ def decide_should_process(source_key: str, path: Optional[Path]) -> bool:
                     log(f"⚠️ {source_key}: no se pudo borrar duplicado: {e}")
             return False
 
-        # Hash distinto → guardo hash, adopto como base y proceso
         write_hash(source_key, new_hash)
         adoptar_como_base(source_key, path, new_hash)
         log(f"🔄 {source_key}: cambios detectados → proceso.")
@@ -611,7 +610,7 @@ def crear_libro_cambios(source_key: str,
     return out
 
 # ========= SALIDA “Hoja 1” =========
-# *** CAMBIO CLAVE: nombre público FIJO por fuente ***
+# Publica SIEMPRE como {source_key}_ULTIMA.xlsx (nombre fijo que espera la web).
 def guardar_hoja1_xlsx(source_key: str, path_base: Path, registros: List[Dict[str, Any]], nombre_salida: Optional[str] = None) -> Path:
     wb_out = Workbook(write_only=True)
     h1 = wb_out.create_sheet("Hoja 1")
@@ -628,7 +627,6 @@ def guardar_hoja1_xlsx(source_key: str, path_base: Path, registros: List[Dict[st
     wb_out.save(out)
     log(f"✅ {path_base.stem} → {out.name}")
 
-    # Publicación con nombre constante que espera la web
     try:
         safe = f"{source_key}_ULTIMA.xlsx"
         (PUBLIC_LISTAS_DIR / safe).write_bytes(out.read_bytes())
@@ -637,6 +635,20 @@ def guardar_hoja1_xlsx(source_key: str, path_base: Path, registros: List[Dict[st
         log(f"⚠️ No se pudo copiar Hoja 1 a public_listas: {e}")
 
     return out
+
+# ========= REFRESCO DE “Hoja 1” DESDE BASE =========
+def ensure_hoja1_desde_base(source_key: str, extractor_hoja1) -> None:
+    """Genera/publica Hoja 1 desde la BASE (aunque no haya descargas ni cambios)."""
+    dbp = _db_path(source_key)
+    if not dbp.exists():
+        log(f"ℹ️ {source_key}: no hay base en _db para refrescar Hoja 1.")
+        return
+    try:
+        regs_h1 = extractor_hoja1(dbp)
+        guardar_hoja1_xlsx(source_key, dbp, regs_h1)
+        log(f"🔁 {source_key}: Hoja 1 refrescada desde base.")
+    except Exception as e:
+        log(f"⚠️ {source_key}: error refrescando Hoja 1 desde base: {e}")
 
 # ========= SELENIUM (headless, CI-friendly) =========
 def _build_chrome() -> webdriver.Chrome:
@@ -729,7 +741,7 @@ def descargar_imsa_web() -> Optional[Path]:
 
 # ========= MAIN =========
 if __name__ == "__main__":
-    log("INICIO — HASH por archivo completo + BASE visible + GATE diario + HOJA1 + DIFERENCIAS")
+    log("INICIO — HASH completo + BASE visible + GATE diario + HOJA1 + DIFERENCIAS + REFRESCO DESDE BASE")
 
     # 1) DESCARGAS (respetando gate diario por fuente)
     tevelam = None
@@ -771,8 +783,8 @@ if __name__ == "__main__":
     # 2) HASH & PROCESO
     log("Comparando hashes y generando salidas…")
     omitidos = []
+    procesados = set()
 
-    # *** CAMBIO: wrapper pasa source_key ***
     def guardar_hoja1(source_key: str, path: Path, registros: List[Dict[str, Any]]):
         guardar_hoja1_xlsx(source_key, path, registros)
 
@@ -784,7 +796,7 @@ if __name__ == "__main__":
             # A) HOJA 1 (SIEMPRE)
             try:
                 regs_h1 = extractor_hoja1(path)
-                guardar_hoja1(source_key, path, regs_h1)  # <-- usa source_key para nombre fijo
+                guardar_hoja1(source_key, path, regs_h1)
             except Exception as e:
                 log(f"⚠️ {source_key}: error generando Hoja 1: {e}")
 
@@ -800,6 +812,7 @@ if __name__ == "__main__":
                 guardar_snapshot(source_key, regs)
             except Exception as e:
                 log(f"⚠️ {source_key}: error calculando/generando diffs: {e}")
+            procesados.add(source_key)
         else:
             omitidos.append(source_key)
 
@@ -808,13 +821,19 @@ if __name__ == "__main__":
     if extra:   run_fuente("ARS_Tech", extra, extraer_proveedor_extra, extraer_extra_hoja1)
     if imsa:    run_fuente("IMSA", imsa,    extraer_imsa,              extraer_imsa_hoja1)
 
+    # 2.b) ***REFRESCAR SIEMPRE “Hoja 1” DESDE LA BASE*** para TODAS las fuentes (si no se procesaron arriba)
+    ensure_hoja1_desde_base("Tevelam",   extraer_tevelam_hoja1)   if "Tevelam"   not in procesados else None
+    ensure_hoja1_desde_base("Disco_Pro", extraer_disco_hoja1)     if "Disco_Pro" not in procesados else None
+    ensure_hoja1_desde_base("ARS_Tech",  extraer_extra_hoja1)     if "ARS_Tech"  not in procesados else None
+    ensure_hoja1_desde_base("IMSA",      extraer_imsa_hoja1)      if "IMSA"      not in procesados else None
+
     # 3) RESUMEN
     log("================ RESUMEN ================")
     if omitidos:
-        log("Omitidos por hash igual (descarga borrada/opcional):")
+        log("Omitidos por hash igual o gate diario (Hoja 1 se refrescó desde base):")
         for n in omitidos:
             log(f"  • {n}")
     else:
-        log("No hubo fuentes omitidas por hash igual.")
+        log("No hubo fuentes omitidas por hash igual / gate.")
 
     log(f"FIN en: {RUTA_DESCARGA}")
