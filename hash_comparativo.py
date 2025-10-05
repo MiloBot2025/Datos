@@ -1,5 +1,5 @@
-# hash_comparativo.py — hash por archivo completo + base visible + gate diario
-# + Hoja1 + difs precios + ***REFRESCO DE HOJA1 DESDE LA BASE***
+# hash_comparativo.py — HASH por archivo completo + BASE visible + GATE diario
+# + Hoja1 multi-hoja robusta + difs precios + refresco Hoja1 desde base
 from __future__ import annotations
 
 import csv
@@ -34,14 +34,14 @@ REPORTS_DIR   = BASE_DIR / "_reports"
 PUBLIC_REPORTS_DIR = BASE_DIR / "public_reports"
 PUBLIC_LISTAS_DIR  = BASE_DIR / "public_listas"
 
-# NUEVOS: copia exacta de base por fuente (visible en web)
+# copia exacta de base por fuente (visible en web)
 DB_DIR        = BASE_DIR / "_db"
 PUBLIC_DB_DIR = BASE_DIR / "public_db"
 
 for d in (RUTA_DESCARGA, HASH_DB_DIR, SNAP_DIR, REPORTS_DIR, PUBLIC_REPORTS_DIR, PUBLIC_LISTAS_DIR, DB_DIR, PUBLIC_DB_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
-# Si el hash es igual al previo → se elimina el archivo recién bajado (configurable por ENV).
+# Si el hash es igual al previo → se elimina el archivo recién bajado.
 BORRAR_DUPLICADO = os.getenv("BORRAR_DUPLICADO", "true").lower() == "true"
 
 # URLs fuentes (ajustá si cambian)
@@ -123,11 +123,9 @@ def escribir_db_meta(source_key: str, *, sha256: str, saved_at_utc: str) -> None
     _db_meta_path(source_key).write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
 def adoptar_como_base(source_key: str, downloaded: Path, sha256_hex: str) -> Path:
-    # Copia exacta a _db y publica en public_db
     dst = _db_path(source_key)
     dst.write_bytes(downloaded.read_bytes())
     escribir_db_meta(source_key, sha256=sha256_hex, saved_at_utc=datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"))
-    # publicar en Pages
     try:
         (PUBLIC_DB_DIR / dst.name).write_bytes(dst.read_bytes())
         (PUBLIC_DB_DIR / f"{source_key}_DB.meta.json").write_text(
@@ -141,8 +139,7 @@ def adoptar_como_base(source_key: str, downloaded: Path, sha256_hex: str) -> Pat
 # ========= GATE DIARIO =========
 def base_es_de_hoy(source_key: str) -> bool:
     meta = leer_db_meta(source_key)
-    if not meta:
-        return False
+    if not meta: return False
     try:
         saved_ar = meta.get("saved_at_ar", "")[:10]  # "YYYY-MM-DD ..."
         return saved_ar == hoy_ar_date()
@@ -157,10 +154,6 @@ def skip_por_base_de_hoy(source_key: str) -> bool:
 
 # ========= DECISIÓN (HASH COMPLETO) =========
 def decide_should_process(source_key: str, path: Optional[Path]) -> bool:
-    """
-    SHA-256 del BINARIO COMPLETO.
-    Si cambia → adoptamos base + procesamos. Si no cambia → NO procesamos (pero luego refrescamos Hoja1 desde base).
-    """
     if not path or not path.exists():
         log(f"⏭️ {source_key}: no hay archivo para comparar.")
         return False
@@ -169,7 +162,7 @@ def decide_should_process(source_key: str, path: Optional[Path]) -> bool:
         prev_hash = read_prev_hash(source_key)
         log(f"📇 {source_key}: nuevo={new_hash[:12]}… | previo={(prev_hash[:12] + '…') if prev_hash else 'N/A'}")
         if prev_hash == new_hash:
-            log(f"⏭️ {source_key}: sin cambios (hash igual) → omito proceso (se refrescará Hoja1 desde base).")
+            log(f"⏭️ {source_key}: sin cambios (hash igual) → omito proceso (luego refresco Hoja 1 desde base).")
             if BORRAR_DUPLICADO:
                 try:
                     path.unlink(missing_ok=True)
@@ -177,13 +170,12 @@ def decide_should_process(source_key: str, path: Optional[Path]) -> bool:
                 except Exception as e:
                     log(f"⚠️ {source_key}: no se pudo borrar duplicado: {e}")
             return False
-
         write_hash(source_key, new_hash)
         adoptar_como_base(source_key, path, new_hash)
         log(f"🔄 {source_key}: cambios detectados → proceso.")
         return True
     except Exception as e:
-        log(f"⚠️ {source_key}: error comparando hash: {e} → por las dudas adopto y proceso.")
+        log(f"⚠️ {source_key}: error comparando hash: {e} → adopto y proceso.")
         try:
             h = file_sha256(path)
             write_hash(source_key, h)
@@ -238,7 +230,78 @@ def detectar_columnas(ws, max_scan_rows: int = 60):
             return r_i, tmp
     return None, {"codigo": None, "stock": None, "precio": None, "moneda": None}
 
-# ========= EXTRACTORES (ID, Precio, Moneda) =========
+# ========= NUEVO: elegir mejor hoja para STOCK =========
+def elegir_hoja_stock(wb, fila_inicio_hint: int, col_stock_hint: int):
+    """
+    Recorre TODAS las hojas y devuelve la que más filas útiles aporte.
+    Devuelve: (ws, modo, header_row, cols, filas_detectadas)
+      - modo: "encabezados" o "fallback"
+    """
+    mejor = (None, None, None, {"codigo":None,"stock":None,"precio":None,"moneda":None}, 0)
+    for ws in wb.worksheets:
+        # 1) Intento por encabezados
+        header_row, cols = detectar_columnas(ws)
+        if header_row and cols["codigo"]:
+            cnt = 0
+            max_needed_col = max(v for v in cols.values() if v)
+            for row in ws.iter_rows(min_row=header_row+1, min_col=1, max_col=max_needed_col, values_only=True):
+                cod = row[cols["codigo"]-1] if cols["codigo"] else None
+                if _norm_text(cod): cnt += 1
+            if cnt > mejor[4]:
+                mejor = (ws, "encabezados", header_row, cols, cnt)
+            continue
+
+        # 2) Fallback: 1ra col = código, col_stock_hint = stock
+        cnt_fb = 0
+        max_row = ws.max_row or 1
+        for r in range(fila_inicio_hint, max_row + 1):
+            cod = ws.cell(row=r, column=1).value
+            if _norm_text(cod):
+                cnt_fb += 1
+        if cnt_fb > mejor[4]:
+            mejor = (ws, "fallback", fila_inicio_hint, {"codigo":1,"stock":col_stock_hint,"precio":None,"moneda":None}, cnt_fb)
+
+    return mejor  # puede ser (None, ... ) si todo estuvo vacío
+
+# ========= EXTRACTORES (ID, Stock, Precio, Moneda) =========
+def extraer_registros_con_stock_auto(path: Path, fila_inicio_hint: int, col_stock_hint: int) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    wb = load_workbook(path, read_only=True, data_only=True)
+    try:
+        ws, modo, header_row, cols, filas = elegir_hoja_stock(wb, fila_inicio_hint, col_stock_hint)
+        if not ws:
+            log("⚠️ Hoja1:auto: no se encontró hoja con datos.")
+            return out
+
+        log(f"🧭 Hoja1:auto: usando hoja «{ws.title}» (modo={modo}, filas_detectadas={filas})")
+
+        if modo == "encabezados":
+            max_needed_col = max(v for v in cols.values() if v)
+            for row in ws.iter_rows(min_row=header_row+1, min_col=1, max_col=max_needed_col, values_only=True):
+                cod = row[cols["codigo"]-1] if cols["codigo"] else None
+                if not _norm_text(cod): continue
+                stock_raw = row[cols["stock"]-1] if cols["stock"] else None
+                precio = row[cols["precio"]-1] if cols["precio"] else None
+                moneda = row[cols["moneda"]-1] if cols["moneda"] else None
+                out.append({"ID": _norm_text(cod), "Stock": convertir_stock_generico(stock_raw),
+                            "Precio": try_float(precio), "Moneda": _norm_text(moneda) or None})
+        else:  # fallback
+            max_row = ws.max_row or 1
+            for r in range(fila_inicio_hint, max_row + 1):
+                cod = ws.cell(row=r, column=1).value
+                if not _norm_text(cod): continue
+                raw_stock = ws.cell(row=r, column=col_stock_hint).value if col_stock_hint else None
+                out.append({"ID": _norm_text(cod), "Stock": convertir_stock_generico(raw_stock),
+                            "Precio": None, "Moneda": None})
+
+        if not out:
+            log("⚠️ Hoja1:auto: extrajo 0 registros (revisar formato de proveedor).")
+        else:
+            log(f"📊 Hoja1:auto: {len(out)} registros.")
+        return out
+    finally:
+        wb.close()
+
 def extraer_registros_generico_xlsx(path: Path,
                                     fila_inicio_fallback: int = 2,
                                     col_precio_fb: Optional[int] = None,
@@ -246,9 +309,22 @@ def extraer_registros_generico_xlsx(path: Path,
     out: List[Dict[str, Any]] = []
     wb = load_workbook(path, read_only=True, data_only=True)
     try:
-        ws = wb.active
-        header_row, cols = detectar_columnas(ws)
-        if header_row:
+        # elegir hoja por encabezados para precio/moneda (o fallback simple)
+        mejor = (None, None, None, {"codigo":None,"precio":None,"moneda":None}, 0)
+        for ws in wb.worksheets:
+            header_row, cols = detectar_columnas(ws)
+            if header_row and cols["codigo"]:
+                cnt = 0
+                max_needed_col = max(v for v in cols.values() if v)
+                for row in ws.iter_rows(min_row=header_row+1, min_col=1, max_col=max_needed_col, values_only=True):
+                    cod = row[cols["codigo"]-1] if cols["codigo"] else None
+                    if _norm_text(cod): cnt += 1
+                if cnt > mejor[4]:
+                    mejor = (ws, "encabezados", header_row, cols, cnt)
+
+        ws, modo, header_row, cols, filas = mejor
+        if ws:
+            log(f"🧭 Diffs:auto: usando hoja «{ws.title}» (filas_detectadas={filas})")
             max_needed_col = max(v for v in cols.values() if v)
             for row in ws.iter_rows(min_row=header_row+1, min_col=1, max_col=max_needed_col, values_only=True):
                 cod = row[cols["codigo"]-1] if cols["codigo"] else None
@@ -257,15 +333,19 @@ def extraer_registros_generico_xlsx(path: Path,
                 moneda = row[cols["moneda"]-1] if cols["moneda"] else None
                 out.append({"ID": _norm_text(cod), "Precio": try_float(precio), "Moneda": _norm_text(moneda) or None})
         else:
+            # fallback extremadamente simple (1ra col=ID)
+            ws = wb.active
             for row in ws.iter_rows(min_row=fila_inicio_fallback, min_col=1, max_col=max(ws.max_column, 1), values_only=True):
                 cod = row[0] if len(row) >= 1 else None
                 if not _norm_text(cod): continue
                 precio = row[col_precio_fb-1] if (col_precio_fb and len(row) >= col_precio_fb) else None
                 moneda = row[col_moneda_fb-1] if (col_moneda_fb and len(row) >= col_moneda_fb) else None
                 out.append({"ID": _norm_text(cod), "Precio": try_float(precio), "Moneda": _norm_text(moneda) or None})
+
+        log(f"📈 Diffs:auto: {len(out)} registros.")
+        return out
     finally:
         wb.close()
-    return out
 
 # Para "Hoja 1" necesitamos STOCK
 def convertir_stock_generico(valor):
@@ -284,63 +364,31 @@ def convertir_stock_generico(valor):
     except Exception:
         return None
 
-def extraer_registros_con_stock_fallback(path: Path, fila_inicio: int, col_stock: int) -> List[Dict[str, Any]]:
-    out: List[Dict[str, Any]] = []
-    wb = load_workbook(path, read_only=True, data_only=True)
-    try:
-        ws = wb.active
-        header_row, cols = detectar_columnas(ws)
-        if header_row and cols["codigo"]:
-            max_needed_col = max(v for v in cols.values() if v)
-            for row in ws.iter_rows(min_row=header_row+1, min_col=1, max_col=max_needed_col, values_only=True):
-                cod = row[cols["codigo"]-1] if cols["codigo"] else None
-                if not _norm_text(cod): continue
-                stock_raw = row[cols["stock"]-1] if cols["stock"] else None
-                precio = row[cols["precio"]-1] if cols["precio"] else None
-                moneda = row[cols["moneda"]-1] if cols["moneda"] else None
-                out.append({"ID": _norm_text(cod), "Stock": convertir_stock_generico(stock_raw),
-                            "Precio": try_float(precio), "Moneda": _norm_text(moneda) or None})
-        else:
-            max_row = ws.max_row or 1
-            for r in range(fila_inicio, max_row + 1):
-                cod = ws.cell(row=r, column=1).value
-                if not _norm_text(cod): continue
-                raw_stock = ws.cell(row=r, column=col_stock).value
-                out.append({"ID": _norm_text(cod), "Stock": convertir_stock_generico(raw_stock),
-                            "Precio": None, "Moneda": None})
-    finally:
-        wb.close()
-    return out
-
-# TEVELAM (Hoja 1: inicio 11, stock col I=9) + espejo F/T
+# TEVELAM (auto + espejo F/T)
 def extraer_tevelam_hoja1(path: Path) -> List[Dict[str, Any]]:
-    regs = extraer_registros_con_stock_fallback(path, fila_inicio=11, col_stock=9)
+    base = extraer_registros_con_stock_auto(path, fila_inicio_hint=11, col_stock_hint=9)
     out = []
-    for r in regs:
+    for r in base:
         out.append(r)
         s = r["ID"]
-        if len(s) >= 2:
-            if s.startswith("F"):
-                out.append({"ID": "T"+s[1:], "Stock": r["Stock"], "Precio": None, "Moneda": None})
-            elif s.startswith("T"):
-                out.append({"ID": "F"+s[1:], "Stock": r["Stock"], "Precio": None, "Moneda": None})
+        if s and len(s) >= 2:
+            if s.startswith("F"): out.append({"ID":"T"+s[1:], "Stock":r["Stock"], "Precio":r.get("Precio"), "Moneda":r.get("Moneda")})
+            elif s.startswith("T"): out.append({"ID":"F"+s[1:], "Stock":r["Stock"], "Precio":r.get("Precio"), "Moneda":r.get("Moneda")})
     return out
 
-# DISCO PRO (Hoja 1: inicio 9, stock col G=7) + espejo F/T
+# DISCO PRO (auto + espejo F/T)
 def extraer_disco_hoja1(path: Path) -> List[Dict[str, Any]]:
-    regs = extraer_registros_con_stock_fallback(path, fila_inicio=9, col_stock=7)
+    base = extraer_registros_con_stock_auto(path, fila_inicio_hint=9, col_stock_hint=7)
     out = []
-    for r in regs:
+    for r in base:
         out.append(r)
         s = r["ID"]
-        if len(s) >= 2:
-            if s.startswith("F"):
-                out.append({"ID": "T"+s[1:], "Stock": r["Stock"], "Precio": None, "Moneda": None})
-            elif s.startswith("T"):
-                out.append({"ID": "F"+s[1:], "Stock": r["Stock"], "Precio": None, "Moneda": None})
+        if s and len(s) >= 2:
+            if s.startswith("F"): out.append({"ID":"T"+s[1:], "Stock":r["Stock"], "Precio":r.get("Precio"), "Moneda":r.get("Moneda")})
+            elif s.startswith("T"): out.append({"ID":"F"+s[1:], "Stock":r["Stock"], "Precio":r.get("Precio"), "Moneda":r.get("Moneda")})
     return out
 
-# PROVEEDOR EXTRA (Hoja 1: hoja STOCK o fallback B/D)
+# PROVEEDOR EXTRA (igual a tu lógica, pero si falla usamos auto)
 def extraer_extra_hoja1(path: Path) -> List[Dict[str, Any]]:
     wb = load_workbook(path, read_only=True, data_only=True)
     try:
@@ -358,23 +406,14 @@ def extraer_extra_hoja1(path: Path) -> List[Dict[str, Any]]:
                     moneda = row[cols["moneda"]-1] if cols["moneda"] else None
                     out.append({"ID": _norm_text(cod), "Stock": convertir_stock_generico(stock_raw),
                                 "Precio": try_float(precio), "Moneda": _norm_text(moneda) or None})
+                log(f"📊 EXTRA: {len(out)} regs desde hoja STOCK.")
                 return out
-            else:
-                out = []
-                max_row = st.max_row or 1
-                for r in range(2, max_row + 1):
-                    _id = st.cell(row=r, column=2).value
-                    if not _norm_text(_id): continue
-                    raw = st.cell(row=r, column=4).value
-                    out.append({"ID": _norm_text(_id), "Stock": convertir_stock_generico(raw),
-                                "Precio": None, "Moneda": None})
-                return out
-        else:
-            return extraer_registros_con_stock_fallback(path, fila_inicio=2, col_stock=8)
+        # fallback AUTO
+        return extraer_registros_con_stock_auto(path, fila_inicio_hint=2, col_stock_hint=8)
     finally:
         wb.close()
 
-# IMSA Hoja 1
+# IMSA Hoja 1 (ya era multi-hoja)
 def extraer_imsa_hoja1(path: Path) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     wb = load_workbook(path, read_only=True, data_only=True)
@@ -388,14 +427,24 @@ def extraer_imsa_hoja1(path: Path) -> List[Dict[str, Any]]:
                 target_ws, header_row, cols = ws, hr, c
                 break
         if not target_ws:
-            target_ws = wb.active
-            for row in target_ws.iter_rows(min_row=8, min_col=1, max_col=max(target_ws.max_column, 1), values_only=True):
-                cod = row[0] if len(row) >= 1 else None
-                stx = row[7] if len(row) >= 8 else None
-                if not _norm_text(cod): continue
-                out.append({"ID": _norm_text(cod), "Stock": convertir_stock_generico(stx),
-                            "Precio": None, "Moneda": None})
+            for ws in wb.worksheets:
+                # último recurso: fallback simple
+                max_row = ws.max_row or 1
+                cnt = 0
+                for r in range(8, max_row+1):
+                    cod = ws.cell(row=r, column=1).value
+                    if _norm_text(cod): cnt += 1
+                if cnt > 10:
+                    target_ws = ws
+                    header_row = 7
+                    cols = {"codigo":1,"stock":8,"precio":None,"moneda":None}
+                    break
+
+        if not target_ws:
+            log("⚠️ IMSA: no se encontró hoja con datos.")
             return out
+
+        log(f"🧭 IMSA: usando hoja «{target_ws.title}»")
 
         max_needed_col = max(v for v in cols.values() if v)
         for row in target_ws.iter_rows(min_row=header_row+1, min_col=1, max_col=max_needed_col, values_only=True):
@@ -408,11 +457,12 @@ def extraer_imsa_hoja1(path: Path) -> List[Dict[str, Any]]:
             cod_final = s_cod.split("-", 2)[-1] if s_cod.count("-") >= 2 else s_cod
             out.append({"ID": cod_final, "Stock": convertir_stock_generico(stx),
                         "Precio": try_float(precio), "Moneda": _norm_text(moneda) or None})
+        log(f"📊 IMSA: {len(out)} registros.")
+        return out
     finally:
         wb.close()
-    return out
 
-# Extractores SOLO para difs (ID, Precio, Moneda)
+# Extractores SOLO para difs (ID, Precio, Moneda) — usan auto multi-hoja
 def extraer_tevelam(path: Path) -> List[Dict[str, Any]]:
     return extraer_registros_generico_xlsx(path, fila_inicio_fallback=11)
 
@@ -420,57 +470,47 @@ def extraer_disco(path: Path) -> List[Dict[str, Any]]:
     return extraer_registros_generico_xlsx(path, fila_inicio_fallback=9)
 
 def extraer_proveedor_extra(path: Path) -> List[Dict[str, Any]]:
-    wb = load_workbook(path, read_only=True, data_only=True)
-    try:
-        if "STOCK" in wb.sheetnames:
-            st = wb["STOCK"]
-            header_row, cols = detectar_columnas(st)
-            out: List[Dict[str, Any]] = []
-            if header_row:
-                max_needed_col = max(v for v in cols.values() if v)
-                for row in st.iter_rows(min_row=header_row+1, min_col=1, max_col=max_needed_col, values_only=True):
-                    cod = row[cols["codigo"]-1] if cols["codigo"] else None
-                    if not _norm_text(cod): continue
-                    precio = row[cols["precio"]-1] if cols["precio"] else None
-                    moneda = row[cols["moneda"]-1] if cols["moneda"] else None
-                    out.append({"ID": _norm_text(cod), "Precio": try_float(precio), "Moneda": _norm_text(moneda) or None})
-                return out
-        return extraer_registros_generico_xlsx(path, fila_inicio_fallback=2)
-    finally:
-        wb.close()
+    return extraer_registros_generico_xlsx(path, fila_inicio_fallback=2)
 
 def extraer_imsa(path: Path) -> List[Dict[str, Any]]:
+    # Igual que antes, multi-hoja para precio/moneda
     out: List[Dict[str, Any]] = []
     wb_in = load_workbook(path, read_only=True, data_only=True)
     try:
         target_ws = None
         header_row = None
         cols = {"codigo": None, "precio": None, "moneda": None}
+        best = (None, None, None, None, 0)
         for ws in wb_in.worksheets:
             hr, c = detectar_columnas(ws)
-            if hr:
-                target_ws, header_row, cols = ws, hr, c
-                break
-        if not target_ws:
-            target_ws = wb_in.active
-            for row in target_ws.iter_rows(min_row=8, min_col=1, max_col=max(target_ws.max_column, 1), values_only=True):
+            if hr and c["codigo"]:
+                cnt = 0
+                max_needed_col = max(v for v in c.values() if v)
+                for row in ws.iter_rows(min_row=hr+1, min_col=1, max_col=max_needed_col, values_only=True):
+                    cod = row[c["codigo"]-1] if c["codigo"] else None
+                    if _norm_text(cod): cnt += 1
+                if cnt > best[4]:
+                    best = (ws, hr, c, max_needed_col, cnt)
+        if best[0]:
+            ws, hr, c, maxc, _ = best
+            for row in ws.iter_rows(min_row=hr+1, min_col=1, max_col=maxc, values_only=True):
+                cod = row[c["codigo"]-1] if c["codigo"] else None
+                if not _norm_text(cod): continue
+                precio = row[c["precio"]-1] if c["precio"] else None
+                moneda = row[c["moneda"]-1] if c["moneda"] else None
+                s_cod = _norm_text(cod)
+                cod_final = s_cod.split("-", 2)[-1] if s_cod.count("-") >= 2 else s_cod
+                out.append({"ID": cod_final, "Precio": try_float(precio), "Moneda": _norm_text(moneda) or None})
+        else:
+            ws = wb_in.active
+            for row in ws.iter_rows(min_row=8, min_col=1, max_col=max(ws.max_column, 1), values_only=True):
                 cod = row[0] if len(row) >= 1 else None
                 if not _norm_text(cod): continue
                 out.append({"ID": _norm_text(cod), "Precio": None, "Moneda": None})
-            return out
-
-        max_needed_col = max(v for v in cols.values() if v)
-        for row in target_ws.iter_rows(min_row=header_row+1, min_col=1, max_col=max_needed_col, values_only=True):
-            cod = row[cols["codigo"]-1] if cols["codigo"] else None
-            if not _norm_text(cod): continue
-            precio = row[cols["precio"]-1] if cols["precio"] else None
-            moneda = row[cols["moneda"]-1] if cols["moneda"] else None
-            s_cod = _norm_text(cod)
-            cod_final = s_cod.split("-", 2)[-1] if s_cod.count("-") >= 2 else s_cod
-            out.append({"ID": cod_final, "Precio": try_float(precio), "Moneda": _norm_text(moneda) or None})
+        log(f"📈 IMSA difs: {len(out)} registros.")
+        return out
     finally:
         wb_in.close()
-    return out
 
 # ========= SNAPSHOTS (ID, Precio, Moneda) =========
 def _snap_path(source_key: str) -> Path:
@@ -594,14 +634,7 @@ def crear_libro_cambios(source_key: str,
     wb.save(out)
     log(f"🧾 Reporte generado: {out.name}")
 
-    # Bandera/summary y copia pública
-    (BASE_DIR / "CHANGES_FLAG").write_text("1", encoding="utf-8")
-    with (BASE_DIR / "SUMMARY.md").open("a", encoding="utf-8") as f:
-        f.write(f"## {source_key}\n")
-        f.write(f"- Precios ↑: {cnt_up} | Suma Δ: {sum_up}\n")
-        f.write(f"- Precios ↓: {cnt_dn} | Suma Δ: {sum_dn}\n")
-        f.write(f"- Nuevos: {cnt_new} | Eliminados: {cnt_del}\n\n")
-
+    # copia pública
     try:
         (PUBLIC_REPORTS_DIR / out.name).write_bytes(out.read_bytes())
     except Exception as e:
@@ -610,7 +643,6 @@ def crear_libro_cambios(source_key: str,
     return out
 
 # ========= SALIDA “Hoja 1” =========
-# Publica SIEMPRE como {source_key}_ULTIMA.xlsx (nombre fijo que espera la web).
 def guardar_hoja1_xlsx(source_key: str, path_base: Path, registros: List[Dict[str, Any]], nombre_salida: Optional[str] = None) -> Path:
     wb_out = Workbook(write_only=True)
     h1 = wb_out.create_sheet("Hoja 1")
@@ -625,7 +657,7 @@ def guardar_hoja1_xlsx(source_key: str, path_base: Path, registros: List[Dict[st
         h1.append([r.get("ID"), r.get("Stock"), r.get("Precio"), r.get("Moneda")])
     out = path_base.with_name(path_base.stem + (nombre_salida or "_HOJA1") + ".xlsx")
     wb_out.save(out)
-    log(f"✅ {path_base.stem} → {out.name}")
+    log(f"✅ {path_base.stem} → {out.name} (rows={len(registros)})")
 
     try:
         safe = f"{source_key}_ULTIMA.xlsx"
@@ -638,7 +670,6 @@ def guardar_hoja1_xlsx(source_key: str, path_base: Path, registros: List[Dict[st
 
 # ========= REFRESCO DE “Hoja 1” DESDE BASE =========
 def ensure_hoja1_desde_base(source_key: str, extractor_hoja1) -> None:
-    """Genera/publica Hoja 1 desde la BASE (aunque no haya descargas ni cambios)."""
     dbp = _db_path(source_key)
     if not dbp.exists():
         log(f"ℹ️ {source_key}: no hay base en _db para refrescar Hoja 1.")
@@ -650,7 +681,7 @@ def ensure_hoja1_desde_base(source_key: str, extractor_hoja1) -> None:
     except Exception as e:
         log(f"⚠️ {source_key}: error refrescando Hoja 1 desde base: {e}")
 
-# ========= SELENIUM (headless, CI-friendly) =========
+# ========= SELENIUM (headless) =========
 def _build_chrome() -> webdriver.Chrome:
     chrome_options = Options()
     chrome_options.add_argument("--headless=new")
@@ -659,12 +690,7 @@ def _build_chrome() -> webdriver.Chrome:
     chrome_options.add_argument("--disable-blink-features=AutomationControlled")
     chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
     chrome_options.add_argument("--window-size=1920,1080")
-    prefs = {
-        "download.default_directory": str(RUTA_DESCARGA),
-        "download.prompt_for_download": False,
-        "download.directory_upgrade": True,
-        "safebrowsing.enabled": True,
-    }
+    prefs = {"download.default_directory": str(RUTA_DESCARGA),"download.prompt_for_download": False,"download.directory_upgrade": True,"safebrowsing.enabled": True}
     chrome_options.add_experimental_option("prefs", prefs)
     service = Service(ChromeDriverManager().install())
     return webdriver.Chrome(service=service, options=chrome_options)
@@ -689,8 +715,7 @@ def _find_recent_listaimsa(max_age_sec: int = 180) -> Optional[Path]:
             if (RUTA_DESCARGA / (p.name + ".crdownload")).exists():
                 continue
             candidatos.append(p)
-    if not candidatos:
-        return None
+    if not candidatos: return None
     return max(candidatos, key=lambda x: x.stat().st_mtime)
 
 def descargar_imsa_web() -> Optional[Path]:
@@ -699,7 +724,6 @@ def descargar_imsa_web() -> Optional[Path]:
         driver = _build_chrome()
         log("🌐 Abriendo IMSA…")
         driver.get(IMSA_URL)
-
         try:
             iframes = WebDriverWait(driver, 20).until(EC.presence_of_all_elements_located((By.TAG_NAME, "iframe")))
             driver.switch_to.frame(iframes[0])
@@ -741,9 +765,9 @@ def descargar_imsa_web() -> Optional[Path]:
 
 # ========= MAIN =========
 if __name__ == "__main__":
-    log("INICIO — HASH completo + BASE visible + GATE diario + HOJA1 + DIFERENCIAS + REFRESCO DESDE BASE")
+    log("INICIO — HASH completo + BASE visible + GATE diario + HOJA1 multi-hoja + DIFERENCIAS + REFRESCO DESDE BASE")
 
-    # 1) DESCARGAS (respetando gate diario por fuente)
+    # 1) DESCARGAS (con gate diario por fuente)
     tevelam = None
     if not skip_por_base_de_hoy("Tevelam"):
         try:
@@ -793,14 +817,14 @@ if __name__ == "__main__":
         if not path:
             return
         if decide_should_process(source_key, path):
-            # A) HOJA 1 (SIEMPRE)
+            # A) HOJA 1
             try:
                 regs_h1 = extractor_hoja1(path)
                 guardar_hoja1(source_key, path, regs_h1)
             except Exception as e:
                 log(f"⚠️ {source_key}: error generando Hoja 1: {e}")
 
-            # B) DIFERENCIAS (precios/modelos) y libro condicional
+            # B) DIFERENCIAS (precios/modelos)
             try:
                 regs = extractor_diffs(path)
                 prev = cargar_snapshot(source_key)
@@ -821,7 +845,7 @@ if __name__ == "__main__":
     if extra:   run_fuente("ARS_Tech", extra, extraer_proveedor_extra, extraer_extra_hoja1)
     if imsa:    run_fuente("IMSA", imsa,    extraer_imsa,              extraer_imsa_hoja1)
 
-    # 2.b) ***REFRESCAR SIEMPRE “Hoja 1” DESDE LA BASE*** para TODAS las fuentes (si no se procesaron arriba)
+    # 2.b) REFRESCAR SIEMPRE “Hoja 1” DESDE LA BASE (por si no hubo cambios / gate diario)
     ensure_hoja1_desde_base("Tevelam",   extraer_tevelam_hoja1)   if "Tevelam"   not in procesados else None
     ensure_hoja1_desde_base("Disco_Pro", extraer_disco_hoja1)     if "Disco_Pro" not in procesados else None
     ensure_hoja1_desde_base("ARS_Tech",  extraer_extra_hoja1)     if "ARS_Tech"  not in procesados else None
@@ -830,10 +854,9 @@ if __name__ == "__main__":
     # 3) RESUMEN
     log("================ RESUMEN ================")
     if omitidos:
-        log("Omitidos por hash igual o gate diario (Hoja 1 se refrescó desde base):")
+        log("Omitidos por hash igual/gate (Hoja 1 se refrescó desde base):")
         for n in omitidos:
             log(f"  • {n}")
     else:
-        log("No hubo fuentes omitidas por hash igual / gate.")
-
+        log("No hubo fuentes omitidas por hash igual/gate.")
     log(f"FIN en: {RUTA_DESCARGA}")
