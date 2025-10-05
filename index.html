@@ -2,66 +2,138 @@
 <html lang="es">
 <head>
   <meta charset="utf-8" />
-  <title>Listas y Reportes</title>
+  <title>DMX PRO · Listas y Reportes</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="color-scheme" content="dark light">
+  <link rel="icon" href="assets/dmxpro-logo.png">
   <style>
-    :root { --bg:#0b0f14; --panel:#121822; --ink:#e6edf3; --muted:#9fb0c3; --acc:#6aa9ff; --ok:#00c853; --warn:#ffab00; }
-    html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue","Noto Sans",Arial;}
+    :root{
+      --bg:#0c1118; --panel:#121a24; --ink:#e6edf3; --muted:#9fb0c3; --line:#1f2a36;
+      --acc:#1e5bff; --ok:#00d084; --warn:#ffb020; --err:#ff6b6b; --pill:#1b2430;
+    }
+    @media (prefers-color-scheme: light){
+      :root{ --bg:#f6f8fb; --panel:#ffffff; --ink:#0b1320; --muted:#5b6b7c; --line:#e6edf3; --acc:#1e5bff; --pill:#eef2f7; }
+    }
+    *{box-sizing:border-box}
+    html,body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue","Noto Sans",Arial}
     a{color:var(--acc);text-decoration:none} a:hover{text-decoration:underline}
-    .wrap{max-width:980px;margin:24px auto;padding:0 16px}
-    header{display:flex;align-items:center;gap:12px;margin:8px 0 16px}
-    header h1{font-size:22px;margin:0}
-    .card{background:var(--panel);border:1px solid #1e2530;border-radius:14px;padding:16px;margin:14px 0;box-shadow:0 2px 10px rgba(0,0,0,.25)}
-    h2{font-size:18px;margin:0 0 10px}
-    ul{list-style:none;margin:0;padding:0}
-    li{padding:8px 0;border-bottom:1px solid #232c38}
-    li:last-child{border-bottom:0}
+    .wrap{max-width:1100px;margin:28px auto;padding:0 16px}
+    header{display:flex;align-items:center;justify-content:space-between;margin:0 0 18px}
+    .brand{display:flex;align-items:center;gap:14px}
+    .logoBox{
+      width:160px; height:44px; display:grid; place-items:center;
+      border-radius:12px; background:rgba(30,91,255,.08); border:1px solid rgba(30,91,255,.25);
+      box-shadow:0 4px 18px rgba(30,91,255,.2), inset 0 0 0 1px rgba(255,255,255,.04)
+    }
+    .logoBox img{ max-height:30px; width:auto; object-fit:contain; display:block }
+    h1{font-size:20px;margin:0}
+    .toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+    .btn{
+      background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 12px;cursor:pointer;
+      color:var(--ink);display:inline-flex;align-items:center;gap:8px
+    }
+    .btn:hover{box-shadow:0 2px 10px rgba(0,0,0,.15)}
+    .switch{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
+    .pill{display:inline-flex;align-items:center;gap:6px;background:var(--pill);border:1px solid var(--line);
+      padding:3px 8px;border-radius:999px;font-size:12px;color:var(--muted)}
+    .pill.ok{color:#12d7a5;background:rgba(18,215,165,.08);border-color:rgba(18,215,165,.25)}
+    .pill.warn{color:#ffb020;background:rgba(255,176,32,.08);border-color:rgba(255,176,32,.25)}
+    .pill.err{color:#ff6b6b;background:rgba(255,107,107,.08);border-color:rgba(255,107,107,.25)}
     .meta{color:var(--muted);font-size:13px}
-    .pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;margin-left:8px}
-    .ok{background:#00391e;color:#7dffb2;border:1px solid #0b5}
-    .no{background:#3a1111;color:#ffb2b2;border:1px solid #a33}
-    .warn{background:#2a220f;color:#ffd27d;border:1px solid #aa7}
-    footer{color:var(--muted);font-size:12px;margin:18px 0 40px}
-    code{background:#0f1420;border:1px solid #1d2532;padding:1px 6px;border-radius:6px}
+    .grid{display:grid;gap:16px;grid-template-columns:repeat(12,1fr)}
+    .card{
+      grid-column: span 12; background:var(--panel); border:1px solid var(--line); border-radius:16px;
+      padding:16px; box-shadow:0 2px 20px rgba(0,0,0,.12)
+    }
+    @media(min-width:840px){ .card.half{grid-column: span 6} }
+    h2{font-size:18px;margin:0 0 10px}
+    ul{list-style:none;margin:6px 0 0;padding:0}
+    li{padding:10px 0;border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+    li:last-child{border-bottom:0}
+    .grow{flex:1 1 auto;min-width:220px}
+    .actions{display:flex;gap:6px}
+    .tag{font-size:12px;color:var(--muted);border:1px dashed var(--line);padding:2px 6px;border-radius:8px}
+    .search{display:flex;align-items:center;gap:8px;margin:8px 0 0}
+    .search input{
+      width:100%; padding:10px 12px; border:1px solid var(--line); background:transparent; color:var(--ink);
+      border-radius:10px; outline:none
+    }
+    .small{font-size:12px}
+    footer{color:var(--muted);font-size:12px;margin:18px 0 44px}
+    code{background:rgba(125,140,160,.13);border:1px solid var(--line);padding:.5px 6px;border-radius:6px}
   </style>
 </head>
 <body>
   <div class="wrap">
     <header>
-      <h1>Listas y Reportes</h1>
-      <span class="pill ok" id="onlinePill">online</span>
+      <div class="brand">
+        <div class="logoBox">
+          <!-- Ponemos el src por JS con cache-busting -->
+          <img id="brandLogo" data-src="assets/dmxpro-logo.png" alt="DMX PRO logo">
+        </div>
+        <div>
+          <h1>DMX PRO · Listas y Reportes</h1>
+          <div class="meta">Última actualización (AR): <span id="lastUpdate">—</span></div>
+        </div>
+      </div>
+      <div class="toolbar">
+        <span class="pill ok" id="onlinePill">online</span>
+        <button class="btn" id="refreshBtn" title="Volver a cargar">
+          <span>↻</span> Actualizar
+        </button>
+        <label class="switch">
+          <input type="checkbox" id="autoToggle">
+          Auto-refresh <span class="small meta">(60s)</span>
+        </label>
+      </div>
     </header>
 
-    <div class="meta">Última actualización render: <span id="lastUpdate"></span></div>
+    <div class="grid">
+      <section class="card half" id="bases">
+        <h2>Bases (copia exacta)</h2>
+        <ul id="basesList"><li class="meta">Cargando…</li></ul>
+      </section>
 
-    <div class="card" id="bases">
-      <h2>Bases (copia exacta)</h2>
-      <ul id="basesList"><li class="meta">Cargando…</li></ul>
-    </div>
+      <section class="card half" id="listas">
+        <h2>Últimas “Hoja 1”</h2>
+        <ul id="listasList"><li class="meta">Cargando…</li></ul>
+      </section>
 
-    <div class="card" id="listas">
-      <h2>Últimas “Hoja 1”</h2>
-      <ul id="listasList"><li class="meta">Cargando…</li></ul>
-    </div>
-
-    <div class="card" id="reportes">
-      <h2>Reportes de cambios</h2>
-      <ul id="reportsList"><li class="meta">Cargando…</li></ul>
+      <section class="card" id="reportes">
+        <h2>Reportes de cambios</h2>
+        <div class="search">
+          <input id="searchReports" type="search" placeholder="Buscar por nombre…">
+          <span class="pill" id="countReports">—</span>
+        </div>
+        <ul id="reportsList"><li class="meta">Cargando…</li></ul>
+      </section>
     </div>
 
     <footer>
-      Si algo no se ve, probá refrescar fuerte (Ctrl/Cmd + F5). Esta página usa <code>?ts=cache-busting</code> para forzar el CDN.
+      Si algo no se ve, probá refrescar fuerte (Ctrl/Cmd + F5). Esta página usa <code>?ts=</code> para evitar caché del CDN.
     </footer>
   </div>
 
 <script>
 (function(){
-  const TS = Date.now();
-  const bust = (u) => u + (u.includes('?') ? '&' : '?') + 'ts=' + TS;
+  // ========= Utiles =========
+  const toAR = new Intl.DateTimeFormat('es-AR',{dateStyle:'short',timeStyle:'medium',timeZone:'America/Argentina/Buenos_Aires'});
+  const toARDay = new Intl.DateTimeFormat('es-AR',{dateStyle:'short',timeZone:'America/Argentina/Buenos_Aires'});
+  const bust = (u) => u + (u.includes('?')?'&':'?') + 'ts=' + Date.now();
+  const $ = (s)=>document.querySelector(s);
 
-  document.getElementById('lastUpdate').textContent = new Date(TS).toISOString();
+  // Logo con cache-busting
+  const logo = $('#brandLogo');
+  logo.src = bust(logo.dataset.src);
 
-  // Fuentes y nombres esperados (con fallback al viejo nombre de IMSA)
+  // Hora AR y estado online
+  const setLastUpdate = ()=> $('#lastUpdate').textContent = toAR.format(new Date()) + '';
+  setLastUpdate();
+  const onlinePill = $('#onlinePill');
+  const updOnline=()=>{onlinePill.textContent=navigator.onLine?'online':'offline';onlinePill.className='pill '+(navigator.onLine?'ok':'err');};
+  window.addEventListener('online',updOnline); window.addEventListener('offline',updOnline); updOnline();
+
+  // ========= Fuentes =========
   const FUENTES = {
     Tevelam:   { listaNames: ["Tevelam_ULTIMA.xlsx"],    dbName: "Tevelam_DB.xlsx" },
     Disco_Pro: { listaNames: ["Disco_Pro_ULTIMA.xlsx"],  dbName: "Disco_Pro_DB.xlsx" },
@@ -69,90 +141,130 @@
     IMSA:      { listaNames: ["IMSA_ULTIMA.xlsx","ListaImsa_ULTIMA.xlsx"], dbName: "IMSA_DB.xlsx" }
   };
 
-  async function urlExists(url){
-    try {
-      const res = await fetch(url, { method: "HEAD", cache: "no-store" });
-      return res.ok;
-    } catch { return false; }
-  }
-
+  async function headOK(url){ try{ const r=await fetch(url,{method:'HEAD',cache:'no-store'}); return r.ok; }catch{return false;} }
   async function findFirstExisting(basePath, names){
     for (const n of names){
-      const u = basePath + "/" + n;
-      if (await urlExists(u)) return bust(u);
-      // probar también con cache-busting por si el CDN tiene versión vieja
-      if (await urlExists(bust(u))) return bust(u);
+      const raw = `${basePath}/${n}`;
+      if (await headOK(bust(raw))) return {url:bust(raw), file:n};
     }
     return null;
   }
 
+  // ========= Bases =========
   async function renderBases(){
-    const ul = document.getElementById('basesList');
-    ul.innerHTML = "";
+    const ul = $('#basesList'); ul.innerHTML = '';
+    const todayStr = toARDay.format(new Date());
     for (const key of Object.keys(FUENTES)){
-      const dbPath = "public_db/" + FUENTES[key].dbName;
-      const metaPath = "public_db/" + FUENTES[key].dbName.replace(/\.xlsx$/,".meta.json");
-      const exists = await urlExists(bust(dbPath));
+      const db = `public_db/${FUENTES[key].dbName}`;
+      const meta = db.replace(/\.xlsx$/,".meta.json");
       const li = document.createElement('li');
-      if (exists){
-        let metaTxt = "";
+
+      if (await headOK(bust(db))){
+        let trailing = '';
         try{
-          const r = await fetch(bust(metaPath), {cache:"no-store"});
+          const r = await fetch(bust(meta), {cache:'no-store'});
           if (r.ok){
-            const meta = await r.json();
-            metaTxt = ` — sha256: <code>${(meta.sha256||"").slice(0,12)}…</code> — guardado AR: ${meta.saved_at_ar||"?"}`;
+            const m = await r.json();
+            const saved = (m.saved_at_ar||'').slice(0,19);
+            const sha = (m.sha256||'').slice(0,12)+'…';
+            const isToday = (m.saved_at_ar||'').slice(0,10) === (new Date()).toISOString().slice(0,10) || todayStr === (m.saved_at_ar||'').slice(0,10);
+            trailing = ` <span class="pill ${isToday?'ok':'warn'}">${isToday?'hoy':'no hoy'}</span> <span class="meta">sha256: <code>${sha}</code> · guardado AR: ${saved}</span>`;
           }
         }catch{}
-        li.innerHTML = `• <a href="${bust(dbPath)}" download>${FUENTES[key].dbName}</a><span class="pill ok">disponible</span> <span class="meta">${metaTxt}</span>`;
+        const copyUrl = location.origin + location.pathname + db;
+        li.innerHTML = `<span class="grow">• <a href="${bust(db)}" download>${FUENTES[key].dbName}</a>${trailing}</span>
+                        <span class="actions"><button class="btn small" data-copy="${copyUrl}">Copiar link</button></span>`;
       } else {
-        li.innerHTML = `• ${FUENTES[key].dbName} <span class="pill no">no encontrado</span>`;
+        li.innerHTML = `<span class="grow">• ${FUENTES[key].dbName} <span class="pill err">no encontrado</span></span>`;
       }
       ul.appendChild(li);
     }
   }
 
+  // ========= Listas (Hoja 1) =========
   async function renderListas(){
-    const ul = document.getElementById('listasList');
-    ul.innerHTML = "";
+    const ul = $('#listasList'); ul.innerHTML = '';
     for (const key of Object.keys(FUENTES)){
-      const url = await findFirstExisting("public_listas", FUENTES[key].listaNames);
+      const found = await findFirstExisting('public_listas', FUENTES[key].listaNames);
       const li = document.createElement('li');
-      if (url){
-        const nameShown = decodeURIComponent(url.split("/").pop().split("?")[0]);
-        li.innerHTML = `• <a href="${url}" download>${nameShown}</a> <span class="pill ok">disponible</span>`;
+      if (found){
+        const file = found.file; // sin ?ts
+        const shown = file;
+        const copyUrl = location.origin + location.pathname + 'public_listas/' + file;
+        li.innerHTML = `<span class="grow">• <a href="${found.url}" download>${shown}</a> <span class="pill ok">disponible</span></span>
+                        <span class="actions"><button class="btn small" data-copy="${copyUrl}">Copiar link</button></span>`;
       } else {
-        li.innerHTML = `• ${FUENTES[key].listaNames[0]} <span class="pill no">no encontrado</span>`;
+        li.innerHTML = `<span class="grow">• ${FUENTES[key].listaNames[0]} <span class="pill err">no encontrado</span></span>`;
       }
       ul.appendChild(li);
     }
   }
 
+  // ========= Reportes =========
   async function renderReportes(){
-    const ul = document.getElementById('reportsList');
-    ul.innerHTML = "";
+    const ul = $('#reportsList'); ul.innerHTML = '';
+    const count = $('#countReports');
     try{
-      const r = await fetch(bust("public_reports/index.json"), {cache:"no-store"});
-      if (!r.ok) throw new Error("index.json no disponible");
-      const data = await r.json();
-      // se espera un array de objetos: { name, size_kb, url }
-      (data || []).forEach(item => {
+      const r = await fetch(bust('public_reports/index.json'), {cache:'no-store'});
+      if (!r.ok) throw new Error('index.json no disponible');
+      const arr = await r.json();
+      count.textContent = `${arr.length} ítems`;
+      const q = ($('#searchReports').value||'').toLowerCase().trim();
+      const list = arr.filter(x => !q || (x.name||'').toLowerCase().includes(q));
+      if (!list.length){ ul.innerHTML = '<li class="meta">Sin resultados para el filtro.</li>'; return; }
+      for (const it of list){
+        const href = bust(it.url || ('public_reports/'+it.name));
+        const when = new Date((it.mtime||0)*1000);
+        const arWhen = isNaN(when) ? '—' : toAR.format(when);
+        const isToday = !isNaN(when) && (toARDay.format(new Date()) === toARDay.format(when));
+        const size = (it.size_kb!=null? `${it.size_kb.toLocaleString('es-AR')} KB` : '—');
+        const copyUrl = location.origin + location.pathname + (it.url || ('public_reports/'+it.name));
         const li = document.createElement('li');
-        const link = bust(item.url || ("public_reports/" + item.name));
-        li.innerHTML = `• <a href="${link}" download>${item.name}</a> <span class="meta">— ${item.size_kb||""} KB</span>`;
+        li.innerHTML = `<span class="grow">• <a href="${href}" download>${it.name}</a>
+                        <span class="pill ${isToday?'ok':'warn'}">${isToday?'hoy':'no hoy'}</span>
+                        <span class="tag">${size}</span> <span class="meta">generado: ${arWhen}</span></span>
+                        <span class="actions"><button class="btn small" data-copy="${copyUrl}">Copiar link</button></span>`;
         ul.appendChild(li);
-      });
-      if (!ul.children.length){
-        ul.innerHTML = '<li class="meta">No hay reportes generados todavía.</li>';
       }
     }catch(e){
+      count.textContent = '—';
       ul.innerHTML = '<li class="meta">No se pudo leer <code>public_reports/index.json</code>.</li>';
     }
   }
 
-  (async function run(){
+  // ========= Acciones comunes =========
+  async function renderAll(){
+    setLastUpdate();
     await Promise.all([renderBases(), renderListas(), renderReportes()]);
-  })();
+  }
 
+  // Copiar link
+  document.addEventListener('click', (ev)=>{
+    const btn = ev.target.closest('button[data-copy]');
+    if (!btn) return;
+    const url = btn.getAttribute('data-copy');
+    navigator.clipboard.writeText(url).then(()=>{
+      btn.textContent = 'Copiado ✓';
+      setTimeout(()=>btn.textContent='Copiar link',1200);
+    });
+  });
+
+  // Buscar en reportes
+  $('#searchReports').addEventListener('input', ()=>renderReportes());
+
+  // Botón refrescar
+  $('#refreshBtn').addEventListener('click', ()=>renderAll());
+
+  // Auto-refresh
+  const auto = $('#autoToggle');
+  let timer = null;
+  auto.addEventListener('change', ()=>{
+    if (auto.checked){ timer = setInterval(()=>renderAll(), 60000); renderAll(); }
+    else { clearInterval(timer); timer = null; }
+  });
+
+  // Primer render
+  renderAll();
 })();
 </script>
 </body>
