@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <title>Listas y Reportes — Venetian / DMX SRL</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="https://unpkg.com/@picocss/pico@2/css/pico.min.css">
+  <style>
+    :root { --pico-font-size: 16px; }
+    header { margin: 1rem 0 .5rem; }
+    .grid { display:grid; gap:1rem; grid-template-columns: repeat(auto-fit,minmax(280px,1fr)); }
+    .mono { font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace; }
+    .muted { opacity:.75; }
+    .tag { display:inline-block; padding:.2rem .5rem; border-radius:.5rem; background:var(--pico-muted-border-color); }
+  </style>
+</head>
+<body>
+<main class="container">
+  <header>
+    <hgroup>
+      <h1>Listas y Reportes</h1>
+      <p class="muted">Venetian / DMX SRL — Última actualización <span id="lastUpdate">…</span> (AR)</p>
+    </hgroup>
+  </header>
+
+  <section>
+    <h2>📦 Bases de datos (copia exacta)</h2>
+    <p class="muted">Cada archivo es la base vigente por proveedor (hash por archivo completo). <span class="tag">public_db/</span></p>
+    <div id="dbGrid" class="grid"></div>
+  </section>
+
+  <section>
+    <h2>📋 Últimas “Hoja 1”</h2>
+    <p class="muted">Salida procesada con Stock/Precio/Moneda. <span class="tag">public_listas/</span></p>
+    <div id="listasGrid" class="grid"></div>
+  </section>
+
+  <section>
+    <h2>🧾 Reportes de cambios</h2>
+    <p class="muted">Precios ↑/↓, nuevos y eliminados. <span class="tag">public_reports/</span></p>
+    <div id="reportsGrid" class="grid"></div>
+  </section>
+
+  <footer>
+    <hr />
+    <small class="muted">Zona horaria: America/Argentina/Buenos_Aires — generado en GitHub Actions.</small>
+  </footer>
+</main>
+
+<script>
+const TZ = 'America/Argentina/Buenos_Aires';
+const SOURCES = ["Tevelam","Disco_Pro","ARS_Tech","IMSA"];
+
+function fmtAR(isoLike){
+  try{
+    const dt = new Date(isoLike.replace(' ', 'T') + 'Z');
+    return new Intl.DateTimeFormat('es-AR',{dateStyle:'short',timeStyle:'short',timeZone:TZ}).format(dt);
+  }catch{return isoLike;}
+}
+
+async function headSize(url){
+  try{
+    const r = await fetch(url,{method:'HEAD'});
+    const b = r.headers.get('content-length');
+    if(!b) return '—';
+    const n = Number(b);
+    if(n<1024) return `${n} B`;
+    if(n<1024*1024) return `${(n/1024).toFixed(1)} KB`;
+    return `${(n/(1024*1024)).toFixed(2)} MB`;
+  }catch{return '—';}
+}
+
+function card({title, href, meta, extra}){
+  return `
+  <article>
+    <header><strong>${title}</strong></header>
+    ${meta?`<p class="mono">${meta}</p>`:''}
+    ${extra?`<p class="muted">${extra}</p>`:''}
+    <footer><a href="${href}" role="button">Descargar</a></footer>
+  </article>`;
+}
+
+async function loadDB(){
+  const grid = document.getElementById('dbGrid');
+  let latestTS = 0;
+
+  for(const s of SOURCES){
+    const metaUrl = `public_db/${s}_DB.meta.json`;
+    const fileUrl = `public_db/${s}_DB.xlsx`;
+    try{
+      const r = await fetch(metaUrl);
+      if(!r.ok) continue;
+      const meta = await r.json();
+      const size = await headSize(fileUrl);
+      const when = meta.saved_at_utc || meta.saved_at_ar || '';
+      const ts = Date.parse((when||'').replace(' ','T'));
+      if(ts && ts>latestTS) latestTS = ts;
+
+      grid.insertAdjacentHTML('beforeend', card({
+        title: `${s} — Base`,
+        href: fileUrl,
+        meta: `SHA256: ${meta.sha256?.slice(0,12)}… · ${size}`,
+        extra: `Guardado: ${fmtAR(meta.saved_at_utc || when)}`
+      }));
+    }catch(e){}
+  }
+
+  if(latestTS){
+    const d = new Date(latestTS);
+    document.getElementById('lastUpdate').textContent =
+      new Intl.DateTimeFormat('es-AR',{dateStyle:'short',timeStyle:'short',timeZone:TZ}).format(d);
+  }
+}
+
+async function loadListas(){
+  const grid = document.getElementById('listasGrid');
+  for(const s of SOURCES){
+    const url = `public_listas/${s}_ULTIMA.xlsx`;
+    const size = await headSize(url);
+    grid.insertAdjacentHTML('beforeend', card({
+      title: `${s} — Hoja 1 (última)`,
+      href: url,
+      meta: `Tamaño: ${size}`
+    }));
+  }
+}
+
+async function loadReports(){
+  const grid = document.getElementById('reportsGrid');
+  try{
+    const r = await fetch('public_reports/index.json');
+    if(!r.ok){ grid.innerHTML = `<p class="muted">Aún no hay reportes indexados.</p>`; return; }
+    const items = await r.json(); // [{name, href, bytes, mtime}]
+    if(!Array.isArray(items) || !items.length){
+      grid.innerHTML = `<p class="muted">Aún no hay reportes.</p>`; return;
+    }
+    items.sort((a,b)=>b.mtime-a.mtime);
+    for(const it of items.slice(0,24)){
+      const size = it.bytes? (it.bytes<1024? `${it.bytes} B` : it.bytes<1048576? `${(it.bytes/1024).toFixed(1)} KB` : `${(it.bytes/1048576).toFixed(2)} MB`) : '—';
+      const when = new Date(it.mtime*1000).toISOString();
+      grid.insertAdjacentHTML('beforeend', card({
+        title: it.name.replace('.xlsx',''),
+        href: it.href,
+        meta: `Tamaño: ${size}`,
+        extra: `Modificado: ${fmtAR(when)}`
+      }));
+    }
+  }catch{
+    grid.innerHTML = `<p class="muted">No se pudo cargar el índice de reportes.</p>`;
+  }
+}
+
+loadDB(); loadListas(); loadReports();
+</script>
+</body>
+</html>
