@@ -1,12 +1,32 @@
+# Bytecode / caches
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 
-# carpetas y archivos generados por tu script
+# Entornos locales (opcionales)
+.venv/
+venv/
+.env
+
+# Salidas temporales del script (NO publicar)
 run_out/
 downloads/
 _reports/
 _snapshots/
 _hashdb/
-public_reports/
-public_listas/
 site/
+
+# === Artefactos que SÍ queremos PUBLICAR en GitHub Pages ===
+# (aseguramos que se incluyan aunque exista una regla global)
+!public_db/
+!public_db/**
+
+!public_listas/
+!public_listas/**
+
+!public_reports/
+!public_reports/**
+
+# Misceláneos
+.DS_Store
