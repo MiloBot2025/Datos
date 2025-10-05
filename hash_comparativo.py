@@ -55,10 +55,6 @@ IMSA_PASSWORD = os.getenv("IMSA_PASSWORD", "lista2021")
 REQ_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 TIMEOUT = 60
 
-# IMSA: incluir TODO para analizar precio aunque no haya stock
-IMSA_SOLO_CON_STOCK = os.getenv("IMSA_SOLO_CON_STOCK", "false").lower() == "true"
-IMSA_BORRAR_ORIGINAL = os.getenv("IMSA_BORRAR_ORIGINAL", "false").lower() == "true"
-
 # ========= LOG / UTILS =========
 def log(msg: str) -> None:
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
@@ -272,7 +268,7 @@ def extraer_registros_generico_xlsx(path: Path,
         wb.close()
     return out
 
-# Para "Hoja 1" (como antes) necesitamos STOCK
+# Para "Hoja 1" necesitamos STOCK
 def convertir_stock_generico(valor):
     t = _norm_text_lc(valor)
     if t in {"sin stock","sinstock","sin-stock","no","0","agotado","sin"}:
@@ -294,7 +290,6 @@ def extraer_registros_con_stock_fallback(path: Path, fila_inicio: int, col_stock
     wb = load_workbook(path, read_only=True, data_only=True)
     try:
         ws = wb.active
-        # Intento por encabezados primero
         header_row, cols = detectar_columnas(ws)
         if header_row and cols["codigo"]:
             max_needed_col = max(v for v in cols.values() if v)
@@ -307,7 +302,6 @@ def extraer_registros_con_stock_fallback(path: Path, fila_inicio: int, col_stock
                 out.append({"ID": _norm_text(cod), "Stock": convertir_stock_generico(stock_raw),
                             "Precio": try_float(precio), "Moneda": _norm_text(moneda) or None})
         else:
-            # Fallback histórico
             max_row = ws.max_row or 1
             for r in range(fila_inicio, max_row + 1):
                 cod = ws.cell(row=r, column=1).value
@@ -617,7 +611,8 @@ def crear_libro_cambios(source_key: str,
     return out
 
 # ========= SALIDA “Hoja 1” =========
-def guardar_hoja1_xlsx(path_base: Path, registros: List[Dict[str, Any]], nombre_salida: Optional[str] = None) -> Path:
+# *** CAMBIO CLAVE: nombre público FIJO por fuente ***
+def guardar_hoja1_xlsx(source_key: str, path_base: Path, registros: List[Dict[str, Any]], nombre_salida: Optional[str] = None) -> Path:
     wb_out = Workbook(write_only=True)
     h1 = wb_out.create_sheet("Hoja 1")
     try:
@@ -633,10 +628,11 @@ def guardar_hoja1_xlsx(path_base: Path, registros: List[Dict[str, Any]], nombre_
     wb_out.save(out)
     log(f"✅ {path_base.stem} → {out.name}")
 
-    # Copia la última "Hoja 1" a carpeta pública (una por fuente)
+    # Publicación con nombre constante que espera la web
     try:
-        safe = f"{path_base.stem}_ULTIMA.xlsx"
+        safe = f"{source_key}_ULTIMA.xlsx"
         (PUBLIC_LISTAS_DIR / safe).write_bytes(out.read_bytes())
+        log(f"📤 Publicada Hoja 1 → public_listas/{safe}")
     except Exception as e:
         log(f"⚠️ No se pudo copiar Hoja 1 a public_listas: {e}")
 
@@ -776,8 +772,9 @@ if __name__ == "__main__":
     log("Comparando hashes y generando salidas…")
     omitidos = []
 
-    def guardar_hoja1(path: Path, registros: List[Dict[str, Any]]):
-        guardar_hoja1_xlsx(path, registros)
+    # *** CAMBIO: wrapper pasa source_key ***
+    def guardar_hoja1(source_key: str, path: Path, registros: List[Dict[str, Any]]):
+        guardar_hoja1_xlsx(source_key, path, registros)
 
     def run_fuente(source_key: str, path: Optional[Path],
                    extractor_diffs, extractor_hoja1):
@@ -787,7 +784,7 @@ if __name__ == "__main__":
             # A) HOJA 1 (SIEMPRE)
             try:
                 regs_h1 = extractor_hoja1(path)
-                guardar_hoja1(path, regs_h1)
+                guardar_hoja1(source_key, path, regs_h1)  # <-- usa source_key para nombre fijo
             except Exception as e:
                 log(f"⚠️ {source_key}: error generando Hoja 1: {e}")
 
