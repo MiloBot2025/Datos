@@ -1,0 +1,70 @@
+name: HashComparativo (AR)
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"   # corre cada 30 min (UTC). Cambiá si querés.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup Chrome (para Selenium/IMSA)
+        uses: browser-actions/setup-chrome@v1
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests openpyxl selenium webdriver-manager
+
+      - name: Run script
+        env:
+          WORKDIR: ${{ github.workspace }}
+          IMSA_PASSWORD: ${{ secrets.IMSA_PASSWORD }}   # opcional
+          BORRAR_DUPLICADO: "true"
+        run: |
+          python hash_comparativo.py
+
+      - name: Build public_reports/index.json
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path("public_reports")
+          root.mkdir(exist_ok=True, parents=True)
+          items = []
+          for p in root.glob("*.xlsx"):
+              st = p.stat()
+              items.append({
+                  "name": p.name,
+                  "href": f"public_reports/{p.name}",
+                  "bytes": st.st_size,
+                  "mtime": int(st.st_mtime)
+              })
+          items.sort(key=lambda x: x["mtime"], reverse=True)
+          (root/"index.json").write_text(json.dumps(items, indent=2), encoding="utf-8")
+          print(f"Index con {len(items)} reportes.")
+          PY
+
+      - name: Commit & Push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Sin cambios para commitear."
+          else
+            git commit -m "CI: actualizar bases, hojas y reportes"
+            git push
+          fi
