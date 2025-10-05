@@ -1,9 +1,9 @@
-# hash_comparativo.py  — descargas, hoja1 y reporte de cambios (CI-ready)
-
+# hash_comparativo.py — hash por archivo completo + base visible + gate diario + Hoja1 + difs precios
 from __future__ import annotations
 
 import csv
 import time
+import json
 import hashlib
 from pathlib import Path
 from datetime import datetime
@@ -33,13 +33,17 @@ REPORTS_DIR   = BASE_DIR / "_reports"
 PUBLIC_REPORTS_DIR = BASE_DIR / "public_reports"
 PUBLIC_LISTAS_DIR  = BASE_DIR / "public_listas"
 
-for d in (RUTA_DESCARGA, HASH_DB_DIR, SNAP_DIR, REPORTS_DIR, PUBLIC_REPORTS_DIR, PUBLIC_LISTAS_DIR):
+# NUEVOS: copia exacta de base por fuente (visible en web)
+DB_DIR        = BASE_DIR / "_db"
+PUBLIC_DB_DIR = BASE_DIR / "public_db"
+
+for d in (RUTA_DESCARGA, HASH_DB_DIR, SNAP_DIR, REPORTS_DIR, PUBLIC_REPORTS_DIR, PUBLIC_LISTAS_DIR, DB_DIR, PUBLIC_DB_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
 # Si el hash es igual al previo → se elimina el archivo recién bajado (configurable por ENV).
 BORRAR_DUPLICADO = os.getenv("BORRAR_DUPLICADO", "true").lower() == "true"
 
-# URLs fuentes
+# URLs fuentes (ajustá si cambian)
 URL_TEVELAM = "https://drive.google.com/uc?export=download&id=1hPH3VwQDtMgx_AkC5hFCUbM2MEiwBEpT"
 URL_DISCO_PRO = "https://drive.google.com/uc?id=1-aQ842Dq3T1doA-Enb34iNNzenLGkVkr&export=download"
 URL_PROVEEDOR_EXTRA = "https://docs.google.com/uc?id=1JnUnrpZUniTXUafkAxCInPG7O39yrld5&export=download"
@@ -61,6 +65,18 @@ def log(msg: str) -> None:
 
 def ts() -> str:
     return datetime.now().strftime("%Y%m%d_%H%M%S")
+
+# ========= FECHA LOCAL ARG =========
+try:
+    from zoneinfo import ZoneInfo
+    TZ_AR = ZoneInfo("America/Argentina/Buenos_Aires")
+except Exception:
+    TZ_AR = None
+
+def hoy_ar_date() -> str:
+    if TZ_AR:
+        return datetime.now(TZ_AR).strftime("%Y-%m-%d")
+    return datetime.now().strftime("%Y-%m-%d")
 
 # ========= HASH =========
 def file_sha256(path: Path, chunk_size: int = 1024 * 1024) -> str:
@@ -85,7 +101,70 @@ def read_prev_hash(source_key: str) -> Optional[str]:
 def write_hash(source_key: str, hexhash: str) -> None:
     _hash_path(source_key).write_text(hexhash, encoding='utf-8')
 
+# ========= MANEJO DE BASE (COPIA EXACTA) =========
+def _db_path(source_key: str) -> Path:
+    return DB_DIR / f"{source_key}_DB.xlsx"
+
+def _db_meta_path(source_key: str) -> Path:
+    return DB_DIR / f"{source_key}_DB.meta.json"
+
+def leer_db_meta(source_key: str) -> Dict[str, Any]:
+    p = _db_meta_path(source_key)
+    if not p.exists(): return {}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+def escribir_db_meta(source_key: str, *, sha256: str, saved_at_utc: str) -> None:
+    meta = {
+        "source": source_key,
+        "sha256": sha256,
+        "saved_at_utc": saved_at_utc,
+        "saved_at_ar": datetime.now(TZ_AR).strftime("%Y-%m-%d %H:%M:%S") if TZ_AR else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+    _db_meta_path(source_key).write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+
+def adoptar_como_base(source_key: str, downloaded: Path, sha256_hex: str) -> Path:
+    # Copia exacta a _db y publica en public_db
+    dst = _db_path(source_key)
+    dst.write_bytes(downloaded.read_bytes())
+    escribir_db_meta(source_key, sha256=sha256_hex, saved_at_utc=datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"))
+    # publicar en Pages
+    try:
+        (PUBLIC_DB_DIR / dst.name).write_bytes(dst.read_bytes())
+        (PUBLIC_DB_DIR / f"{source_key}_DB.meta.json").write_text(
+            _db_meta_path(source_key).read_text(encoding="utf-8"), encoding="utf-8"
+        )
+    except Exception as e:
+        log(f"⚠️ No se pudo publicar base en public_db: {e}")
+    log(f"💾 Base actualizada: {dst.name}")
+    return dst
+
+# ========= GATE DIARIO =========
+def base_es_de_hoy(source_key: str) -> bool:
+    meta = leer_db_meta(source_key)
+    if not meta:
+        return False
+    try:
+        saved_ar = meta.get("saved_at_ar", "")[:10]  # "YYYY-MM-DD ..."
+        return saved_ar == hoy_ar_date()
+    except Exception:
+        return False
+
+def skip_por_base_de_hoy(source_key: str) -> bool:
+    if base_es_de_hoy(source_key):
+        log(f"⏭️ {source_key}: base vigente es de HOY (AR) → omito descarga/búsqueda hasta mañana.")
+        return True
+    return False
+
+# ========= DECISIÓN (HASH COMPLETO) =========
 def decide_should_process(source_key: str, path: Optional[Path]) -> bool:
+    """
+    Comparación estricta por SHA-256 del BINARIO COMPLETO.
+    Si es distinto al último guardado en _hashdb → adoptamos como base y procesamos.
+    Si es igual → (opcionalmente borra descarga) y NO procesamos.
+    """
     if not path or not path.exists():
         log(f"⏭️ {source_key}: no hay archivo para comparar.")
         return False
@@ -94,7 +173,7 @@ def decide_should_process(source_key: str, path: Optional[Path]) -> bool:
         prev_hash = read_prev_hash(source_key)
         log(f"📇 {source_key}: nuevo={new_hash[:12]}… | previo={(prev_hash[:12] + '…') if prev_hash else 'N/A'}")
         if prev_hash == new_hash:
-            log(f"⏭️ {source_key}: sin cambios (hash igual) → omito y borro descarga.")
+            log(f"⏭️ {source_key}: sin cambios (hash igual) → omito.")
             if BORRAR_DUPLICADO:
                 try:
                     path.unlink(missing_ok=True)
@@ -102,11 +181,20 @@ def decide_should_process(source_key: str, path: Optional[Path]) -> bool:
                 except Exception as e:
                     log(f"⚠️ {source_key}: no se pudo borrar duplicado: {e}")
             return False
+
+        # Hash distinto → guardo hash, adopto como base y proceso
         write_hash(source_key, new_hash)
-        log(f"🔄 {source_key}: cambios detectados (hash distinto) → conservo y proceso.")
+        adoptar_como_base(source_key, path, new_hash)
+        log(f"🔄 {source_key}: cambios detectados → proceso.")
         return True
     except Exception as e:
-        log(f"⚠️ {source_key}: error comparando hash: {e} → por las dudas conservo y proceso.")
+        log(f"⚠️ {source_key}: error comparando hash: {e} → por las dudas adopto y proceso.")
+        try:
+            h = file_sha256(path)
+            write_hash(source_key, h)
+            adoptar_como_base(source_key, path, h)
+        except Exception:
+            pass
         return True
 
 # ========= DESCARGAS =========
@@ -194,7 +282,8 @@ def convertir_stock_generico(valor):
     if t in {"mayor a 5",">5","alto","con stock","constock","en stock","stock","disponible","si","sí"}:
         return 6
     try:
-        n = float(t.replace(",", "."))
+        n = float(t.replace(",", ".")) if t else None
+        if n is None: return None
         if n <= 0: return 0
         return 6 if n >= 5 else 2
     except Exception:
@@ -512,7 +601,7 @@ def crear_libro_cambios(source_key: str,
     wb.save(out)
     log(f"🧾 Reporte generado: {out.name}")
 
-    # ====== BANDERA y RESUMEN PARA EMAIL + PUBLICACIÓN ======
+    # Bandera/summary y copia pública
     (BASE_DIR / "CHANGES_FLAG").write_text("1", encoding="utf-8")
     with (BASE_DIR / "SUMMARY.md").open("a", encoding="utf-8") as f:
         f.write(f"## {source_key}\n")
@@ -520,7 +609,6 @@ def crear_libro_cambios(source_key: str,
         f.write(f"- Precios ↓: {cnt_dn} | Suma Δ: {sum_dn}\n")
         f.write(f"- Nuevos: {cnt_new} | Eliminados: {cnt_del}\n\n")
 
-    # copia también a carpeta pública para Pages
     try:
         (PUBLIC_REPORTS_DIR / out.name).write_bytes(out.read_bytes())
     except Exception as e:
@@ -528,7 +616,7 @@ def crear_libro_cambios(source_key: str,
 
     return out
 
-# ========= SALIDA “Hoja 1” (siempre, igual que antes) =========
+# ========= SALIDA “Hoja 1” =========
 def guardar_hoja1_xlsx(path_base: Path, registros: List[Dict[str, Any]], nombre_salida: Optional[str] = None) -> Path:
     wb_out = Workbook(write_only=True)
     h1 = wb_out.create_sheet("Hoja 1")
@@ -590,7 +678,6 @@ def _find_recent_listaimsa(max_age_sec: int = 180) -> Optional[Path]:
         try: mtime = p.stat().st_mtime
         except Exception: continue
         if now - mtime <= max_age_sec:
-            # en Linux headless no siempre hay .crdownload; el chequeo es tolerante
             if (RUTA_DESCARGA / (p.name + ".crdownload")).exists():
                 continue
             candidatos.append(p)
@@ -646,36 +733,44 @@ def descargar_imsa_web() -> Optional[Path]:
 
 # ========= MAIN =========
 if __name__ == "__main__":
-    log("INICIO ULTRA + HASH (borrar duplicados) + HOJA1 + DIFERENCIAS (precios/modelos)")
+    log("INICIO — HASH por archivo completo + BASE visible + GATE diario + HOJA1 + DIFERENCIAS")
 
-    # 1) DESCARGAS
-    try:
-        log("Descargando Tevelam…")
-        tevelam = download_simple(URL_TEVELAM, "Tevelam")
-        log(f"Tevelam → {tevelam}")
-    except Exception as e:
-        log(f"ERROR Tevelam: {e}"); tevelam = None
+    # 1) DESCARGAS (respetando gate diario por fuente)
+    tevelam = None
+    if not skip_por_base_de_hoy("Tevelam"):
+        try:
+            log("Descargando Tevelam…")
+            tevelam = download_simple(URL_TEVELAM, "Tevelam")
+            log(f"Tevelam → {tevelam}")
+        except Exception as e:
+            log(f"ERROR Tevelam: {e}")
 
-    try:
-        log("Descargando Disco Pro…")
-        disco = download_simple(URL_DISCO_PRO, "Disco_Pro")
-        log(f"Disco_Pro → {disco}")
-    except Exception as e:
-        log(f"ERROR Disco Pro: {e}"); disco = None
+    disco = None
+    if not skip_por_base_de_hoy("Disco_Pro"):
+        try:
+            log("Descargando Disco Pro…")
+            disco = download_simple(URL_DISCO_PRO, "Disco_Pro")
+            log(f"Disco_Pro → {disco}")
+        except Exception as e:
+            log(f"ERROR Disco Pro: {e}")
 
-    try:
-        log("Descargando Proveedor Extra…")
-        extra = download_simple(URL_PROVEEDOR_EXTRA, "ARS_Tech")
-        log(f"ARS_Tech → {extra}")
-    except Exception as e:
-        log(f"ERROR Proveedor Extra: {e}"); extra = None
+    extra = None
+    if not skip_por_base_de_hoy("ARS_Tech"):
+        try:
+            log("Descargando Proveedor Extra…")
+            extra = download_simple(URL_PROVEEDOR_EXTRA, "ARS_Tech")
+            log(f"ARS_Tech → {extra}")
+        except Exception as e:
+            log(f"ERROR Proveedor Extra: {e}")
 
-    try:
-        log("Lanzando IMSA…")
-        imsa = descargar_imsa_web()
-        log(f"IMSA detectado → {imsa}")
-    except Exception as e:
-        log(f"ERROR flujo IMSA: {e}"); imsa = None
+    imsa = None
+    if not skip_por_base_de_hoy("IMSA"):
+        try:
+            log("Lanzando IMSA…")
+            imsa = descargar_imsa_web()
+            log(f"IMSA detectado → {imsa}")
+        except Exception as e:
+            log(f"ERROR flujo IMSA: {e}")
 
     # 2) HASH & PROCESO
     log("Comparando hashes y generando salidas…")
@@ -714,12 +809,12 @@ if __name__ == "__main__":
     if tevelam: run_fuente("Tevelam", tevelam, extraer_tevelam,        extraer_tevelam_hoja1)
     if disco:   run_fuente("Disco_Pro", disco, extraer_disco,          extraer_disco_hoja1)
     if extra:   run_fuente("ARS_Tech", extra, extraer_proveedor_extra, extraer_extra_hoja1)
-    if imsa:    run_fuente("IMSA", imsa,    extraer_imsa,             extraer_imsa_hoja1)
+    if imsa:    run_fuente("IMSA", imsa,    extraer_imsa,              extraer_imsa_hoja1)
 
     # 3) RESUMEN
     log("================ RESUMEN ================")
     if omitidos:
-        log("Omitidos por hash igual (descarga borrada):")
+        log("Omitidos por hash igual (descarga borrada/opcional):")
         for n in omitidos:
             log(f"  • {n}")
     else:
