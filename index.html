@@ -2,155 +2,158 @@
 <html lang="es">
 <head>
   <meta charset="utf-8" />
-  <title>Listas y Reportes — Venetian / DMX SRL</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link rel="stylesheet" href="https://unpkg.com/@picocss/pico@2/css/pico.min.css">
+  <title>Listas y Reportes</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
-    :root { --pico-font-size: 16px; }
-    header { margin: 1rem 0 .5rem; }
-    .grid { display:grid; gap:1rem; grid-template-columns: repeat(auto-fit,minmax(280px,1fr)); }
-    .mono { font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace; }
-    .muted { opacity:.75; }
-    .tag { display:inline-block; padding:.2rem .5rem; border-radius:.5rem; background:var(--pico-muted-border-color); }
+    :root { --bg:#0b0f14; --panel:#121822; --ink:#e6edf3; --muted:#9fb0c3; --acc:#6aa9ff; --ok:#00c853; --warn:#ffab00; }
+    html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue","Noto Sans",Arial;}
+    a{color:var(--acc);text-decoration:none} a:hover{text-decoration:underline}
+    .wrap{max-width:980px;margin:24px auto;padding:0 16px}
+    header{display:flex;align-items:center;gap:12px;margin:8px 0 16px}
+    header h1{font-size:22px;margin:0}
+    .card{background:var(--panel);border:1px solid #1e2530;border-radius:14px;padding:16px;margin:14px 0;box-shadow:0 2px 10px rgba(0,0,0,.25)}
+    h2{font-size:18px;margin:0 0 10px}
+    ul{list-style:none;margin:0;padding:0}
+    li{padding:8px 0;border-bottom:1px solid #232c38}
+    li:last-child{border-bottom:0}
+    .meta{color:var(--muted);font-size:13px}
+    .pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;margin-left:8px}
+    .ok{background:#00391e;color:#7dffb2;border:1px solid #0b5}
+    .no{background:#3a1111;color:#ffb2b2;border:1px solid #a33}
+    .warn{background:#2a220f;color:#ffd27d;border:1px solid #aa7}
+    footer{color:var(--muted);font-size:12px;margin:18px 0 40px}
+    code{background:#0f1420;border:1px solid #1d2532;padding:1px 6px;border-radius:6px}
   </style>
 </head>
 <body>
-<main class="container">
-  <header>
-    <hgroup>
+  <div class="wrap">
+    <header>
       <h1>Listas y Reportes</h1>
-      <p class="muted">Venetian / DMX SRL — Última actualización <span id="lastUpdate">…</span> (AR)</p>
-    </hgroup>
-  </header>
+      <span class="pill ok" id="onlinePill">online</span>
+    </header>
 
-  <section>
-    <h2>📦 Bases de datos (copia exacta)</h2>
-    <p class="muted">Cada archivo es la base vigente por proveedor (hash por archivo completo). <span class="tag">public_db/</span></p>
-    <div id="dbGrid" class="grid"></div>
-  </section>
+    <div class="meta">Última actualización render: <span id="lastUpdate"></span></div>
 
-  <section>
-    <h2>📋 Últimas “Hoja 1”</h2>
-    <p class="muted">Salida procesada con Stock/Precio/Moneda. <span class="tag">public_listas/</span></p>
-    <div id="listasGrid" class="grid"></div>
-  </section>
+    <div class="card" id="bases">
+      <h2>Bases (copia exacta)</h2>
+      <ul id="basesList"><li class="meta">Cargando…</li></ul>
+    </div>
 
-  <section>
-    <h2>🧾 Reportes de cambios</h2>
-    <p class="muted">Precios ↑/↓, nuevos y eliminados. <span class="tag">public_reports/</span></p>
-    <div id="reportsGrid" class="grid"></div>
-  </section>
+    <div class="card" id="listas">
+      <h2>Últimas “Hoja 1”</h2>
+      <ul id="listasList"><li class="meta">Cargando…</li></ul>
+    </div>
 
-  <footer>
-    <hr />
-    <small class="muted">Zona horaria: America/Argentina/Buenos_Aires — generado en GitHub Actions.</small>
-  </footer>
-</main>
+    <div class="card" id="reportes">
+      <h2>Reportes de cambios</h2>
+      <ul id="reportsList"><li class="meta">Cargando…</li></ul>
+    </div>
+
+    <footer>
+      Si algo no se ve, probá refrescar fuerte (Ctrl/Cmd + F5). Esta página usa <code>?ts=cache-busting</code> para forzar el CDN.
+    </footer>
+  </div>
 
 <script>
-const TZ = 'America/Argentina/Buenos_Aires';
-const SOURCES = ["Tevelam","Disco_Pro","ARS_Tech","IMSA"];
+(function(){
+  const TS = Date.now();
+  const bust = (u) => u + (u.includes('?') ? '&' : '?') + 'ts=' + TS;
 
-function fmtAR(isoLike){
-  try{
-    const dt = new Date(isoLike.replace(' ', 'T') + 'Z');
-    return new Intl.DateTimeFormat('es-AR',{dateStyle:'short',timeStyle:'short',timeZone:TZ}).format(dt);
-  }catch{return isoLike;}
-}
+  document.getElementById('lastUpdate').textContent = new Date(TS).toISOString();
 
-async function headSize(url){
-  try{
-    const r = await fetch(url,{method:'HEAD'});
-    const b = r.headers.get('content-length');
-    if(!b) return '—';
-    const n = Number(b);
-    if(n<1024) return `${n} B`;
-    if(n<1024*1024) return `${(n/1024).toFixed(1)} KB`;
-    return `${(n/(1024*1024)).toFixed(2)} MB`;
-  }catch{return '—';}
-}
+  // Fuentes y nombres esperados (con fallback al viejo nombre de IMSA)
+  const FUENTES = {
+    Tevelam:   { listaNames: ["Tevelam_ULTIMA.xlsx"],    dbName: "Tevelam_DB.xlsx" },
+    Disco_Pro: { listaNames: ["Disco_Pro_ULTIMA.xlsx"],  dbName: "Disco_Pro_DB.xlsx" },
+    ARS_Tech:  { listaNames: ["ARS_Tech_ULTIMA.xlsx"],   dbName: "ARS_Tech_DB.xlsx" },
+    IMSA:      { listaNames: ["IMSA_ULTIMA.xlsx","ListaImsa_ULTIMA.xlsx"], dbName: "IMSA_DB.xlsx" }
+  };
 
-function card({title, href, meta, extra}){
-  return `
-  <article>
-    <header><strong>${title}</strong></header>
-    ${meta?`<p class="mono">${meta}</p>`:''}
-    ${extra?`<p class="muted">${extra}</p>`:''}
-    <footer><a href="${href}" role="button">Descargar</a></footer>
-  </article>`;
-}
+  async function urlExists(url){
+    try {
+      const res = await fetch(url, { method: "HEAD", cache: "no-store" });
+      return res.ok;
+    } catch { return false; }
+  }
 
-async function loadDB(){
-  const grid = document.getElementById('dbGrid');
-  let latestTS = 0;
+  async function findFirstExisting(basePath, names){
+    for (const n of names){
+      const u = basePath + "/" + n;
+      if (await urlExists(u)) return bust(u);
+      // probar también con cache-busting por si el CDN tiene versión vieja
+      if (await urlExists(bust(u))) return bust(u);
+    }
+    return null;
+  }
 
-  for(const s of SOURCES){
-    const metaUrl = `public_db/${s}_DB.meta.json`;
-    const fileUrl = `public_db/${s}_DB.xlsx`;
+  async function renderBases(){
+    const ul = document.getElementById('basesList');
+    ul.innerHTML = "";
+    for (const key of Object.keys(FUENTES)){
+      const dbPath = "public_db/" + FUENTES[key].dbName;
+      const metaPath = "public_db/" + FUENTES[key].dbName.replace(/\.xlsx$/,".meta.json");
+      const exists = await urlExists(bust(dbPath));
+      const li = document.createElement('li');
+      if (exists){
+        let metaTxt = "";
+        try{
+          const r = await fetch(bust(metaPath), {cache:"no-store"});
+          if (r.ok){
+            const meta = await r.json();
+            metaTxt = ` — sha256: <code>${(meta.sha256||"").slice(0,12)}…</code> — guardado AR: ${meta.saved_at_ar||"?"}`;
+          }
+        }catch{}
+        li.innerHTML = `• <a href="${bust(dbPath)}" download>${FUENTES[key].dbName}</a><span class="pill ok">disponible</span> <span class="meta">${metaTxt}</span>`;
+      } else {
+        li.innerHTML = `• ${FUENTES[key].dbName} <span class="pill no">no encontrado</span>`;
+      }
+      ul.appendChild(li);
+    }
+  }
+
+  async function renderListas(){
+    const ul = document.getElementById('listasList');
+    ul.innerHTML = "";
+    for (const key of Object.keys(FUENTES)){
+      const url = await findFirstExisting("public_listas", FUENTES[key].listaNames);
+      const li = document.createElement('li');
+      if (url){
+        const nameShown = decodeURIComponent(url.split("/").pop().split("?")[0]);
+        li.innerHTML = `• <a href="${url}" download>${nameShown}</a> <span class="pill ok">disponible</span>`;
+      } else {
+        li.innerHTML = `• ${FUENTES[key].listaNames[0]} <span class="pill no">no encontrado</span>`;
+      }
+      ul.appendChild(li);
+    }
+  }
+
+  async function renderReportes(){
+    const ul = document.getElementById('reportsList');
+    ul.innerHTML = "";
     try{
-      const r = await fetch(metaUrl);
-      if(!r.ok) continue;
-      const meta = await r.json();
-      const size = await headSize(fileUrl);
-      const when = meta.saved_at_utc || meta.saved_at_ar || '';
-      const ts = Date.parse((when||'').replace(' ','T'));
-      if(ts && ts>latestTS) latestTS = ts;
-
-      grid.insertAdjacentHTML('beforeend', card({
-        title: `${s} — Base`,
-        href: fileUrl,
-        meta: `SHA256: ${meta.sha256?.slice(0,12)}… · ${size}`,
-        extra: `Guardado: ${fmtAR(meta.saved_at_utc || when)}`
-      }));
-    }catch(e){}
-  }
-
-  if(latestTS){
-    const d = new Date(latestTS);
-    document.getElementById('lastUpdate').textContent =
-      new Intl.DateTimeFormat('es-AR',{dateStyle:'short',timeStyle:'short',timeZone:TZ}).format(d);
-  }
-}
-
-async function loadListas(){
-  const grid = document.getElementById('listasGrid');
-  for(const s of SOURCES){
-    const url = `public_listas/${s}_ULTIMA.xlsx`;
-    const size = await headSize(url);
-    grid.insertAdjacentHTML('beforeend', card({
-      title: `${s} — Hoja 1 (última)`,
-      href: url,
-      meta: `Tamaño: ${size}`
-    }));
-  }
-}
-
-async function loadReports(){
-  const grid = document.getElementById('reportsGrid');
-  try{
-    const r = await fetch('public_reports/index.json');
-    if(!r.ok){ grid.innerHTML = `<p class="muted">Aún no hay reportes indexados.</p>`; return; }
-    const items = await r.json(); // [{name, href, bytes, mtime}]
-    if(!Array.isArray(items) || !items.length){
-      grid.innerHTML = `<p class="muted">Aún no hay reportes.</p>`; return;
+      const r = await fetch(bust("public_reports/index.json"), {cache:"no-store"});
+      if (!r.ok) throw new Error("index.json no disponible");
+      const data = await r.json();
+      // se espera un array de objetos: { name, size_kb, url }
+      (data || []).forEach(item => {
+        const li = document.createElement('li');
+        const link = bust(item.url || ("public_reports/" + item.name));
+        li.innerHTML = `• <a href="${link}" download>${item.name}</a> <span class="meta">— ${item.size_kb||""} KB</span>`;
+        ul.appendChild(li);
+      });
+      if (!ul.children.length){
+        ul.innerHTML = '<li class="meta">No hay reportes generados todavía.</li>';
+      }
+    }catch(e){
+      ul.innerHTML = '<li class="meta">No se pudo leer <code>public_reports/index.json</code>.</li>';
     }
-    items.sort((a,b)=>b.mtime-a.mtime);
-    for(const it of items.slice(0,24)){
-      const size = it.bytes? (it.bytes<1024? `${it.bytes} B` : it.bytes<1048576? `${(it.bytes/1024).toFixed(1)} KB` : `${(it.bytes/1048576).toFixed(2)} MB`) : '—';
-      const when = new Date(it.mtime*1000).toISOString();
-      grid.insertAdjacentHTML('beforeend', card({
-        title: it.name.replace('.xlsx',''),
-        href: it.href,
-        meta: `Tamaño: ${size}`,
-        extra: `Modificado: ${fmtAR(when)}`
-      }));
-    }
-  }catch{
-    grid.innerHTML = `<p class="muted">No se pudo cargar el índice de reportes.</p>`;
   }
-}
 
-loadDB(); loadListas(); loadReports();
+  (async function run(){
+    await Promise.all([renderBases(), renderListas(), renderReportes()]);
+  })();
+
+})();
 </script>
 </body>
 </html>
