@@ -1,17 +1,16 @@
-# hash_comparativo.py — copia exacta (DB), Stock V y reportes con estado persistente
+# hash_comparativo.py — SHA por archivo, DB pública, Stock V y diffs (estado persistente)
 
 from __future__ import annotations
 
 import csv
-import json
 import time
+import json
 import hashlib
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Optional, Dict, Any, List, Tuple
 import os
-
-from zoneinfo import ZoneInfo
 
 import requests
 from openpyxl import load_workbook, Workbook
@@ -25,59 +24,55 @@ from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 
 # ========= CONFIG =========
-BASE_DIR = Path(os.getenv("WORKDIR", "."))
+BASE_DIR = Path(os.getenv("WORKDIR", ".")).resolve()
 
-# Descargas efímeras
-RUTA_DESCARGA = BASE_DIR / "downloads"
+# Estado interno
+DB_STATE_DIR  = BASE_DIR / "_db"
+HASH_DIR      = DB_STATE_DIR / "hash"
+SNAP_DIR      = DB_STATE_DIR / "snapshots"
 
-# ESTADO PERSISTENTE (SE COMITEA): hashes y snapshots
-STATE_DIR       = BASE_DIR / "_db"
-STATE_HASH_DIR  = STATE_DIR / "hash"
-STATE_SNAP_DIR  = STATE_DIR / "snapshots"
+# Salidas publicadas (Pages)
+PUBLIC_DB_DIR      = BASE_DIR / "public_db"
+PUBLIC_LISTAS_DIR  = BASE_DIR / "public_listas"
+PUBLIC_REPORTS_DIR = BASE_DIR / "public_reports"
 
-# Publicación (GitHub Pages)
-PUBLIC_DB_DIR      = BASE_DIR / "public_db"       # copia exacta
-PUBLIC_LISTAS_DIR  = BASE_DIR / "public_listas"   # Stock V
-PUBLIC_REPORTS_DIR = BASE_DIR / "public_reports"  # reportes de difs
-
-# (opcionales efímeras locales)
-REPORTS_DIR = BASE_DIR / "_reports"
-SNAP_DIR    = BASE_DIR / "_snapshots"
-HASH_DB_DIR = BASE_DIR / "_hashdb"  # compat
-
-for d in (
-    RUTA_DESCARGA, STATE_DIR, STATE_HASH_DIR, STATE_SNAP_DIR,
-    PUBLIC_DB_DIR, PUBLIC_LISTAS_DIR, PUBLIC_REPORTS_DIR,
-    REPORTS_DIR, SNAP_DIR
-):
+for d in (DB_STATE_DIR, HASH_DIR, SNAP_DIR, PUBLIC_DB_DIR, PUBLIC_LISTAS_DIR, PUBLIC_REPORTS_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
-# Si el hash es igual → borrar descarga
+# Si el hash es igual → borra archivo bajado y omite procesamiento
 BORRAR_DUPLICADO = os.getenv("BORRAR_DUPLICADO", "true").lower() == "true"
 
-# URLs fuentes
-URL_TEVELAM = "https://drive.google.com/uc?export=download&id=1hPH3VwQDtMgx_AkC5hFCUbM2MEiwBEpT"
-URL_DISCO_PRO = "https://drive.google.com/uc?id=1-aQ842Dq3T1doA-Enb34iNNzenLGkVkr&export=download"
+# URLs fuentes (modificá a gusto)
+URL_TEVELAM         = "https://drive.google.com/uc?export=download&id=1hPH3VwQDtMgx_AkC5hFCUbM2MEiwBEpT"
+URL_DISCO_PRO       = "https://drive.google.com/uc?id=1-aQ842Dq3T1doA-Enb34iNNzenLGkVkr&export=download"
 URL_PROVEEDOR_EXTRA = "https://docs.google.com/uc?id=1JnUnrpZUniTXUafkAxCInPG7O39yrld5&export=download"
 
-# IMSA (iframe con password)
-IMSA_URL = "https://listaimsa.com.ar/lista-de-precios/"
+# IMSA
+IMSA_URL      = "https://listaimsa.com.ar/lista-de-precios/"
 IMSA_PASSWORD = os.getenv("IMSA_PASSWORD", "lista2021")
 
 REQ_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 TIMEOUT = 60
 
-IMSA_SOLO_CON_STOCK = os.getenv("IMSA_SOLO_CON_STOCK", "false").lower() == "true"
-IMSA_BORRAR_ORIGINAL = os.getenv("IMSA_BORRAR_ORIGINAL", "false").lower() == "true"
+AR_TZ = ZoneInfo("America/Argentina/Buenos_Aires")
 
 # ========= LOG / UTILS =========
+def now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+def now_ar() -> datetime:
+    return datetime.now(AR_TZ)
+
 def log(msg: str) -> None:
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
+    print(f"[{now_ar().strftime('%H:%M:%S')}] {msg}")
 
 def ts() -> str:
-    return datetime.now().strftime("%Y%m%d_%H%M%S")
+    return now_utc().strftime("%Y%m%d_%H%M%S")
 
-# ========= HASH =========
+# ========= HASH (archivo completo) =========
+def sha_path(source_key: str) -> Path:
+    return HASH_DIR / f"{source_key}.sha256"
+
 def file_sha256(path: Path, chunk_size: int = 1024 * 1024) -> str:
     h = hashlib.sha256()
     with path.open('rb') as f:
@@ -85,12 +80,8 @@ def file_sha256(path: Path, chunk_size: int = 1024 * 1024) -> str:
             h.update(chunk)
     return h.hexdigest()
 
-def _hash_path(source_key: str) -> Path:
-    # hash PERSISTENTE
-    return STATE_HASH_DIR / f"{source_key}.sha256"
-
 def read_prev_hash(source_key: str) -> Optional[str]:
-    p = _hash_path(source_key)
+    p = sha_path(source_key)
     if p.exists():
         try:
             return p.read_text(encoding='utf-8').strip()
@@ -99,10 +90,10 @@ def read_prev_hash(source_key: str) -> Optional[str]:
     return None
 
 def write_hash(source_key: str, hexhash: str) -> None:
-    _hash_path(source_key).write_text(hexhash, encoding='utf-8')
+    sha_path(source_key).write_text(hexhash, encoding='utf-8')
 
 def decide_should_process(source_key: str, path: Optional[Path]) -> Tuple[bool, Optional[str]]:
-    """Devuelve (procesar?, new_hash). No procesa si el hash es igual al previo."""
+    """Devuelve (True, sha) si hay que procesar; si es igual, omite y puede borrar."""
     if not path or not path.exists():
         log(f"⏭️ {source_key}: no hay archivo para comparar.")
         return False, None
@@ -111,25 +102,26 @@ def decide_should_process(source_key: str, path: Optional[Path]) -> Tuple[bool, 
         prev_hash = read_prev_hash(source_key)
         log(f"📇 {source_key}: nuevo={new_hash[:12]}… | previo={(prev_hash[:12] + '…') if prev_hash else 'N/A'}")
         if prev_hash == new_hash:
-            log(f"⏭️ {source_key}: sin cambios (hash igual).")
+            log(f"⏭️ {source_key}: sin cambios (SHA igual) → omito.")
             if BORRAR_DUPLICADO:
                 try:
                     path.unlink(missing_ok=True)
-                    log(f"🗑️ {source_key}: duplicado eliminado: {path.name}")
+                    log(f"🗑️ {source_key}: descargado duplicado eliminado: {path.name}")
                 except Exception as e:
                     log(f"⚠️ {source_key}: no se pudo borrar duplicado: {e}")
             return False, new_hash
         write_hash(source_key, new_hash)
-        log(f"🔄 {source_key}: cambios detectados (hash distinto) → conservo y proceso.")
+        log(f"🔄 {source_key}: cambios detectados (SHA distinto) → conservo y proceso.")
         return True, new_hash
     except Exception as e:
-        log(f"⚠️ {source_key}: error comparando hash: {e} → por las dudas conservo y proceso.")
+        log(f"⚠️ {source_key}: error comparando hash: {e} → por las dudas proceso.")
         return True, None
 
 # ========= DESCARGAS =========
 def download_simple(url: str, base_name: str) -> Optional[Path]:
     try:
-        dst = RUTA_DESCARGA / f"{base_name}_{ts()}.xlsx"
+        dst = BASE_DIR / "downloads" / f"{base_name}_{ts()}.xlsx"
+        dst.parent.mkdir(parents=True, exist_ok=True)
         r = requests.get(url, headers=REQ_HEADERS, timeout=TIMEOUT)
         r.raise_for_status()
         dst.write_bytes(r.content)
@@ -148,11 +140,12 @@ def _norm_text_lc(s: Any) -> str:
 
 def try_float(v):
     if v is None: return None
-    s = _norm_text(v).replace(".", "").replace(",", ".") if isinstance(v, str) else v
+    s = _norm_text(v)
+    s = s.replace(".", "").replace(",", ".") if isinstance(v, str) else v
     try: return float(s)
     except Exception: return None
 
-# candidatos de encabezados
+# Detección de encabezados
 CAND_COD   = {"codigo","código","cod","id","articulo","artículo","sku","modelo"}
 CAND_STOCK = {"stock","estado","disponibilidad","disponible"}
 CAND_PREC  = {"precio","p. lista","p lista","plista","lista","price","valor"}
@@ -201,7 +194,6 @@ def extraer_registros_generico_xlsx(path: Path,
         wb.close()
     return out
 
-# STOCK para "Hoja 1"
 def convertir_stock_generico(valor):
     t = _norm_text_lc(valor)
     if t in {"sin stock","sinstock","sin-stock","no","0","agotado","sin"}:
@@ -245,7 +237,7 @@ def extraer_registros_con_stock_fallback(path: Path, fila_inicio: int, col_stock
         wb.close()
     return out
 
-# TEVELAM Hoja1 (inicio 11, stock col 9) + espejo F/T
+# Fuentes específicas (Stock V)
 def extraer_tevelam_hoja1(path: Path) -> List[Dict[str, Any]]:
     regs = extraer_registros_con_stock_fallback(path, fila_inicio=11, col_stock=9)
     out = []
@@ -259,7 +251,6 @@ def extraer_tevelam_hoja1(path: Path) -> List[Dict[str, Any]]:
                 out.append({"ID": "F"+s[1:], "Stock": r["Stock"], "Precio": None, "Moneda": None})
     return out
 
-# DISCO PRO Hoja1 (inicio 9, stock col 7) + espejo
 def extraer_disco_hoja1(path: Path) -> List[Dict[str, Any]]:
     regs = extraer_registros_con_stock_fallback(path, fila_inicio=9, col_stock=7)
     out = []
@@ -273,7 +264,6 @@ def extraer_disco_hoja1(path: Path) -> List[Dict[str, Any]]:
                 out.append({"ID": "F"+s[1:], "Stock": r["Stock"], "Precio": None, "Moneda": None})
     return out
 
-# PROVEEDOR EXTRA Hoja1
 def extraer_extra_hoja1(path: Path) -> List[Dict[str, Any]]:
     wb = load_workbook(path, read_only=True, data_only=True)
     try:
@@ -307,7 +297,6 @@ def extraer_extra_hoja1(path: Path) -> List[Dict[str, Any]]:
     finally:
         wb.close()
 
-# IMSA Hoja1 (busca hoja con encabezados y limpia código)
 def extraer_imsa_hoja1(path: Path) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     wb = load_workbook(path, read_only=True, data_only=True)
@@ -345,7 +334,7 @@ def extraer_imsa_hoja1(path: Path) -> List[Dict[str, Any]]:
         wb.close()
     return out
 
-# Extractores SOLO difs
+# Extractores SOLO para difs (ID, Precio, Moneda)
 def extraer_tevelam(path: Path) -> List[Dict[str, Any]]:
     return extraer_registros_generico_xlsx(path, fila_inicio_fallback=11)
 
@@ -405,26 +394,20 @@ def extraer_imsa(path: Path) -> List[Dict[str, Any]]:
         wb_in.close()
     return out
 
-# ========= SNAPSHOTS & REPORTES =========
-def _snap_path(source_key: str) -> Path:
-    # snapshot PERSISTENTE
-    return STATE_SNAP_DIR / f"{source_key}_snapshot.csv"
+# ========= SNAPSHOTS (ID, Precio, Moneda) =========
+def snap_path(source_key: str) -> Path:
+    return SNAP_DIR / f"{source_key}_snapshot.csv"
 
 def guardar_snapshot(source_key: str, registros: List[Dict[str, Any]]) -> None:
-    p = _snap_path(source_key)
+    p = snap_path(source_key)
     with p.open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["ID","Precio","Moneda"])
         for r in registros:
             w.writerow([r.get("ID"), r.get("Precio"), r.get("Moneda")])
-    # copia efímera opcional
-    try:
-        (SNAP_DIR / p.name).write_bytes(p.read_bytes())
-    except Exception:
-        pass
 
 def cargar_snapshot(source_key: str) -> Dict[str, Dict[str, Any]]:
-    p = _snap_path(source_key)
+    p = snap_path(source_key)
     data: Dict[str, Dict[str, Any]] = {}
     if not p.exists():
         return data
@@ -438,6 +421,7 @@ def cargar_snapshot(source_key: str) -> Dict[str, Dict[str, Any]]:
             data[row["ID"]] = {"Precio": precio_val, "Moneda": row.get("Moneda") or None}
     return data
 
+# ========= DIFERENCIAS & REPORTE =========
 def calcular_diffs(prev_snap: Dict[str, Dict[str, Any]],
                    curr_regs: List[Dict[str, Any]]
                    ) -> Tuple[List[List[Any]], List[List[Any]], List[List[Any]], List[List[Any]]]:
@@ -459,23 +443,40 @@ def calcular_diffs(prev_snap: Dict[str, Dict[str, Any]],
         curr = curr_map.get(_id, {})
         p_old = prev.get("Precio")
         p_new = curr.get("Precio")
+        try:
+            p_old = float(p_old) if p_old is not None else None
+        except Exception:
+            p_old = None
+        try:
+            p_new = float(p_new) if p_new is not None else None
+        except Exception:
+            p_new = None
+
         mon   = curr.get("Moneda") or prev.get("Moneda")
         if p_old is None or p_new is None:
             continue
-        if p_new != p_old:
-            delta = p_new - p_old
-            delta_pct = (delta / p_old * 100.0) if p_old != 0 else None
-            row = [_id, mon, p_old, p_new, delta, delta_pct]
-            if delta > 0: precios_up.append(row)
-            else:         precios_dn.append(row)
+
+        delta = p_new - p_old
+        delta_pct = (delta / p_old * 100.0) if p_old != 0 else None
+        row = [_id, mon, p_old, p_new, delta, delta_pct]
+        if delta > 0: precios_up.append(row)
+        elif delta < 0: precios_dn.append(row)
 
     for _id in nuevos_ids:
         c = curr_map[_id]
-        nuevos.append([_id, c.get("Moneda"), c.get("Precio")])
+        try:
+            p = float(c.get("Precio")) if c.get("Precio") is not None else None
+        except Exception:
+            p = None
+        nuevos.append([_id, c.get("Moneda"), p])
 
     for _id in elim_ids:
         p = prev_snap[_id]
-        eliminados.append([_id, p.get("Moneda"), p.get("Precio")])
+        try:
+            v = float(p.get("Precio")) if p.get("Precio") is not None else None
+        except Exception:
+            v = None
+        eliminados.append([_id, p.get("Moneda"), v])
 
     return precios_up, precios_dn, nuevos, eliminados
 
@@ -510,15 +511,15 @@ def crear_libro_cambios(source_key: str,
     for r in nuevos:     sh_new.append(r)
     for r in eliminados: sh_del.append(r)
 
-    cnt_up = len(precios_up)
-    cnt_dn = len(precios_dn)
+    cnt_up  = len(precios_up)
+    cnt_dn  = len(precios_dn)
     cnt_new = len(nuevos)
     cnt_del = len(eliminados)
-    sum_up = round(sum((x[4] for x in precios_up)), 4) if cnt_up else 0
-    sum_dn = round(sum((x[4] for x in precios_dn)), 4) if cnt_dn else 0
+    sum_up  = round(sum((x[4] for x in precios_up if isinstance(x[4], (int,float)))), 4) if cnt_up else 0
+    sum_dn  = round(sum((x[4] for x in precios_dn if isinstance(x[4], (int,float)))), 4) if cnt_dn else 0
 
     sh_res.append(["Fuente", source_key])
-    sh_res.append(["Generado", datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
+    sh_res.append(["Generado", now_ar().strftime("%Y-%m-%d %H:%M:%S")])
     sh_res.append([])
     sh_res.append(["Métrica","Valor"])
     sh_res.append(["Precios ↑ (cantidad)", cnt_up])
@@ -528,20 +529,27 @@ def crear_libro_cambios(source_key: str,
     sh_res.append(["Nuevos modelos", cnt_new])
     sh_res.append(["Modelos eliminados", cnt_del])
 
-    out = REPORTS_DIR / f"{source_key}_DIFF_{ts()}.xlsx"
+    out = PUBLIC_REPORTS_DIR / f"{source_key}_DIFF_{ts()}.xlsx"
     wb.save(out)
     log(f"🧾 Reporte generado: {out.name}")
 
-    # copia pública
+    # Bandera/summary opcional
     try:
-        (PUBLIC_REPORTS_DIR / out.name).write_bytes(out.read_bytes())
-    except Exception as e:
-        log(f"⚠️ No se pudo copiar reporte a public_reports: {e}")
+        (BASE_DIR / "CHANGES_FLAG").write_text("1", encoding="utf-8")
+        with (BASE_DIR / "SUMMARY.md").open("a", encoding="utf-8") as f:
+            f.write(f"## {source_key}\n")
+            f.write(f"- Precios ↑: {cnt_up} | Suma Δ: {sum_up}\n")
+            f.write(f"- Precios ↓: {cnt_dn} | Suma Δ: {sum_dn}\n")
+            f.write(f"- Nuevos: {cnt_new} | Eliminados: {cnt_del}\n\n")
+    except Exception:
+        pass
 
     return out
 
-# ========= SALIDA “Hoja 1” =========
-def guardar_hoja1_xlsx(path_base: Path, registros: List[Dict[str, Any]], nombre_salida: Optional[str] = None) -> Path:
+# ========= SALIDAS =========
+def guardar_hoja1_xlsx(source_key: str, registros: List[Dict[str, Any]]) -> Path:
+    """Genera Stock V y lo publica en public_listas/<FUENTE>_ULTIMA.xlsx.
+       Además deja una copia en _db/<FUENTE>_DB_HOJA1.xlsx."""
     wb_out = Workbook(write_only=True)
     h1 = wb_out.create_sheet("Hoja 1")
     try:
@@ -553,40 +561,42 @@ def guardar_hoja1_xlsx(path_base: Path, registros: List[Dict[str, Any]], nombre_
     h1.append(["ID","Stock","Precio","Moneda"])
     for r in registros:
         h1.append([r.get("ID"), r.get("Stock"), r.get("Precio"), r.get("Moneda")])
-    out = path_base.with_name(path_base.stem + (nombre_salida or "_HOJA1") + ".xlsx")
-    wb_out.save(out)
-    log(f"✅ {path_base.stem} → {out.name}")
 
-    # Copia pública (una por fuente)
+    # Copia en estado interno y pública
+    out_state = DB_STATE_DIR / f"{source_key}_DB_HOJA1.xlsx"
+    wb_out.save(out_state)
     try:
-        safe = f"{path_base.stem}_ULTIMA.xlsx"
-        (PUBLIC_LISTAS_DIR / safe).write_bytes(out.read_bytes())
+        (PUBLIC_LISTAS_DIR / f"{source_key}_ULTIMA.xlsx").write_bytes(out_state.read_bytes())
     except Exception as e:
-        log(f"⚠️ No se pudo copiar Hoja 1 a public_listas: {e}")
+        log(f"⚠️ No se pudo copiar Stock V a public_listas: {e}")
 
-    return out
+    log(f"✅ Stock V {source_key} → {out_state.name}")
+    return out_state
 
-# ========= Copia exacta DB + meta =========
-def guardar_db_copia_exacta(source_key: str, path: Path, sha: Optional[str]) -> None:
-    dst = PUBLIC_DB_DIR / f"{source_key}_DB.xlsx"
+def guardar_db_publica(source_key: str, src_path: Path, sha_hex: Optional[str]) -> None:
+    """Copia exacta a public_db/<FUENTE>_DB.xlsx + meta.json y guarda copia en _db/."""
+    # Copia de archivo
+    dst_pub = PUBLIC_DB_DIR / f"{source_key}_DB.xlsx"
+    dst_state = DB_STATE_DIR / f"{source_key}_DB.xlsx"
     try:
-        dst.write_bytes(path.read_bytes())
+        data = src_path.read_bytes()
+        dst_pub.write_bytes(data)
+        dst_state.write_bytes(data)
     except Exception as e:
-        log(f"⚠️ {source_key}: no se pudo copiar DB a public_db: {e}")
-        return
-    try:
-        meta = {
-            "source": source_key,
-            "sha256": sha,
-            "saved_at_utc": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "saved_at_ar": datetime.now(ZoneInfo("America/Argentina/Buenos_Aires")).strftime("%Y-%m-%d %H:%M:%S"),
-            "filename": dst.name,
-        }
-        (PUBLIC_DB_DIR / f"{source_key}_DB.meta.json").write_text(
-            json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-    except Exception as e:
-        log(f"⚠️ {source_key}: no se pudo escribir meta JSON: {e}")
+        log(f"⚠️ No se pudo copiar DB a público/estado: {e}")
+
+    meta = {
+        "source": source_key,
+        "sha256": sha_hex or file_sha256(src_path),
+        "saved_at_ar": now_ar().strftime("%Y-%m-%d %H:%M:%S"),
+        "saved_at_utc": now_utc().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "size_bytes": src_path.stat().st_size if src_path.exists() else None,
+    }
+    for root in (PUBLIC_DB_DIR, DB_STATE_DIR):
+        try:
+            (root / f"{source_key}_DB.meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as e:
+            log(f"⚠️ No se pudo escribir meta.json en {root.name}: {e}")
 
 # ========= SELENIUM (IMSA) =========
 def _build_chrome() -> webdriver.Chrome:
@@ -598,7 +608,7 @@ def _build_chrome() -> webdriver.Chrome:
     chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
     chrome_options.add_argument("--window-size=1920,1080")
     prefs = {
-        "download.default_directory": str(RUTA_DESCARGA),
+        "download.default_directory": str(BASE_DIR / "downloads"),
         "download.prompt_for_download": False,
         "download.directory_upgrade": True,
         "safebrowsing.enabled": True,
@@ -616,7 +626,9 @@ def _find_recent_listaimsa(max_age_sec: int = 180) -> Optional[Path]:
     pats = ("lista", "imsa")
     exts = (".xlsx", ".xls")
     candidatos = []
-    for p in RUTA_DESCARGA.iterdir():
+    dld = BASE_DIR / "downloads"
+    dld.mkdir(exist_ok=True, parents=True)
+    for p in dld.iterdir():
         if not p.is_file(): continue
         if p.suffix.lower() not in exts: continue
         name = p.name.lower()
@@ -624,7 +636,7 @@ def _find_recent_listaimsa(max_age_sec: int = 180) -> Optional[Path]:
         try: mtime = p.stat().st_mtime
         except Exception: continue
         if now - mtime <= max_age_sec:
-            if (RUTA_DESCARGA / (p.name + ".crdownload")).exists():
+            if (dld / (p.name + ".crdownload")).exists():
                 continue
             candidatos.append(p)
     if not candidatos:
@@ -678,39 +690,38 @@ def descargar_imsa_web() -> Optional[Path]:
             log("🧹 Selenium cerrado.")
 
 # ========= MAIN =========
-def run_fuente(source_key: str, path: Optional[Path],
-               extractor_diffs, extractor_hoja1):
+def procesar_fuente(source_key: str,
+                    path: Optional[Path],
+                    extractor_diffs,
+                    extractor_stockv) -> None:
     if not path:
         return
-
-    should, new_sha = decide_should_process(source_key, path)
-    if not should:
-        omitidos.append(source_key)
+    debe, sha_hex = decide_should_process(source_key, path)
+    if not debe:
         return
 
-    # 0) Copia exacta (DB) + meta pública
-    guardar_db_copia_exacta(source_key, path, new_sha)
-
-    # A) Stock V (Hoja 1)
+    # A) Copia exacta de DB (y meta) a public_db + _db
     try:
-        regs_h1 = extractor_hoja1(path)
-        guardar_hoja1(path, regs_h1)
+        guardar_db_publica(source_key, path, sha_hex)
     except Exception as e:
-        log(f"⚠️ {source_key}: error generando Hoja 1: {e}")
+        log(f"⚠️ {source_key}: error copiando DB pública: {e}")
 
-    # B) Reporte de difs (evitar "primera vez")
+    # B) STOCK V (siempre)
+    try:
+        regs_h1 = extractor_stockv(path)
+        guardar_hoja1_xlsx(source_key, regs_h1)
+    except Exception as e:
+        log(f"⚠️ {source_key}: error generando Stock V: {e}")
+
+    # C) DIFERENCIAS (precios/modelos) y libro condicional
     try:
         regs = extractor_diffs(path)
         prev = cargar_snapshot(source_key)
-        first_time = (len(prev) == 0)
-        if first_time:
-            log(f"ℹ️ {source_key}: primer snapshot → no se genera reporte.")
+        precios_up, precios_dn, nuevos, eliminados = calcular_diffs(prev, regs)
+        if hay_cambios(precios_up, precios_dn, nuevos, eliminados):
+            _ = crear_libro_cambios(source_key, precios_up, precios_dn, nuevos, eliminados)
         else:
-            precios_up, precios_dn, nuevos, eliminados = calcular_diffs(prev, regs)
-            if hay_cambios(precios_up, precios_dn, nuevos, eliminados):
-                _ = crear_libro_cambios(source_key, precios_up, precios_dn, nuevos, eliminados)
-            else:
-                log(f"ℹ️ {source_key}: sin cambios de precio/modelos.")
+            log(f"ℹ️ {source_key}: hubo SHA nuevo pero sin cambios de precio/modelos → no se genera libro.")
         guardar_snapshot(source_key, regs)
     except Exception as e:
         log(f"⚠️ {source_key}: error calculando/generando diffs: {e}")
@@ -747,22 +758,13 @@ if __name__ == "__main__":
     except Exception as e:
         log(f"ERROR flujo IMSA: {e}"); imsa = None
 
-    # 2) PROCESO (solo si SHA distinto)
     log("Procesando por fuente (según SHA)…")
-    omitidos: List[str] = []
 
-    if tevelam: run_fuente("Tevelam", tevelam, extraer_tevelam,        extraer_tevelam_hoja1)
-    if disco:   run_fuente("Disco_Pro", disco, extraer_disco,          extraer_disco_hoja1)
-    if extra:   run_fuente("ARS_Tech", extra, extraer_proveedor_extra, extraer_extra_hoja1)
-    if imsa:    run_fuente("IMSA", imsa,    extraer_imsa,              extraer_imsa_hoja1)
+    if tevelam: procesar_fuente("Tevelam",   tevelam, extraer_tevelam,        extraer_tevelam_hoja1)
+    if disco:   procesar_fuente("Disco_Pro", disco,   extraer_disco,          extraer_disco_hoja1)
+    if extra:   procesar_fuente("ARS_Tech",  extra,   extraer_proveedor_extra, extraer_extra_hoja1)
+    if imsa:    procesar_fuente("IMSA",      imsa,    extraer_imsa,            extraer_imsa_hoja1)
 
     # 3) RESUMEN
     log("================ RESUMEN ================")
-    if omitidos:
-        log("Omitidos por hash igual (nada que hacer):")
-        for n in omitidos:
-            log(f"  • {n}")
-    else:
-        log("No hubo fuentes omitidas por hash igual.")
-
-    log(f"FIN en: {RUTA_DESCARGA}")
+    log(f"FIN en: {BASE_DIR / 'downloads'}")
