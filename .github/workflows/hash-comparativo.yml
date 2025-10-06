@@ -1,8 +1,8 @@
-name: HashComparativo (AR)
+name: HashComparativo (AR, main)
 
 on:
   schedule:
-    - cron: "*/30 * * * *"   # cada 30 min (UTC) — el guard de abajo limita por horario AR
+    - cron: "*/30 * * * *"        # se dispara cada 30' (el guard limita por horario AR)
   workflow_dispatch:
 
 permissions:
@@ -11,7 +11,6 @@ permissions:
 jobs:
   run:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,109 +28,111 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests openpyxl selenium webdriver-manager
 
-      # ====== GUARD 1: Ventana L–V 07:00–18:00 (hora AR) ======
-      - name: Guard ventana AR (Lunes a Viernes 07–18)
-        shell: bash
-        run: |
-          export TZ=America/Argentina/Buenos_Aires
-          DOW=$(date +%u)   # 1..7 (Lun..Dom)
-          H=$(date +%H)     # 00..23
-          M=$(date +%M)     # 00..59
-
-          # Solo Lunes a Viernes
-          if [ "$DOW" -gt 5 ]; then
-            echo "Fuera de Lunes a Viernes (AR). Salgo."
-            exit 0
-          fi
-
-          # Ventana 07:00–18:00 AR (incluye 18:00 en punto)
-          if [ "$H" -lt 7 ]; then
-            echo "Antes de las 07:00 AR. Salgo."
-            exit 0
-          fi
-          if [ "$H" -gt 18 ]; then
-            echo "Después de las 18:00 AR. Salgo."
-            exit 0
-          fi
-          if [ "$H" -eq 18 ] && [ "$M" -ne 00 ]; then
-            echo "Después de 18:00 AR (minuto > 00). Salgo."
-            exit 0
-          fi
-
-          echo "Dentro de ventana AR. Continúo…"
-
-      # ====== GUARD 2: ¿Todas las bases ya son de HOY (AR)? ======
-      # Si todas las *_DB.meta.json (public_db) tienen saved_at_ar = hoy, corta el job.
-      - name: Pre-check bases de HOY (AR)
+      # ===== GUARD: Ventana L–V 07:00–18:00 (AR) =====
+      - name: Guard ventana AR
         shell: bash
         run: |
           set -e
           export TZ=America/Argentina/Buenos_Aires
-          AR_TODAY=$(date +%F)  # YYYY-MM-DD
-
-          echo "Fecha AR de hoy: $AR_TODAY"
-          if [ ! -d public_db ]; then
-            echo "No existe public_db aún. Sigo…"
+          DOW=$(date +%u)   # 1..7
+          H=$(date +%H)
+          M=$(date +%M)
+          echo "Ahora (AR): $(date '+%Y-%m-%d %H:%M:%S %Z')  DOW=$DOW H=$H M=$M"
+          if [ "$DOW" -gt 5 ]; then
+            echo "Fin de semana (AR). Salgo."
             exit 0
           fi
+          if [ "$H" -lt 7 ] || [ "$H" -gt 18 ] || { [ "$H" -eq 18 ] && [ "$M" -ne 00 ]; }; then
+            echo "Fuera de la ventana 07:00–18:00 AR. Salgo."
+            exit 0
+          fi
+          echo "Dentro de ventana. Sigo…"
 
+      # ===== PRECHECK (opcional): si TODAS las bases ya son de HOY, cortar temprano =====
+      - name: Precheck: ¿todas las bases son de HOY (AR)?
+        shell: bash
+        run: |
+          set -e
+          export TZ=America/Argentina/Buenos_Aires
+          AR_TODAY=$(date +%F)
+          echo "AR_TODAY=$AR_TODAY"
+          if [ ! -d public_db ]; then
+            echo "No hay public_db todavía. Sigo…"
+            exit 0
+          fi
           OUT=$(python - <<'PY'
 import json,glob,os,sys
-today = os.environ.get("AR_TODAY")
-paths = sorted(glob.glob("public_db/*_DB.meta.json"))
+today=os.environ.get("AR_TODAY")
+paths=sorted(glob.glob("public_db/*_DB.meta.json"))
 if not paths:
-    print("NO_META")
-    sys.exit(0)
-all_today = True
+    print("NO_META"); sys.exit(0)
+all_today=True
 for p in paths:
     try:
-        with open(p, encoding="utf-8") as f:
-            meta = json.load(f)
-        saved = str(meta.get("saved_at_ar",""))[:10]
-        if saved != today:
-            all_today = False
-            break
-    except Exception:
-        all_today = False
-        break
+        with open(p,encoding="utf-8") as f: meta=json.load(f)
+        saved=str(meta.get("saved_at_ar",""))[:10]
+        if saved!=today: all_today=False; break
+    except: all_today=False; break
 print("ALL_TODAY" if all_today else "NOT_ALL")
 PY
 )
           echo "Precheck result: $OUT"
           if [ "$OUT" = "ALL_TODAY" ]; then
-            echo "Todas las bases ya son de HOY (AR). Suspendo ejecución."
+            echo "Todas son de HOY. Salgo para no gastar cuotas."
             exit 0
           fi
-          echo "Hay al menos una base que no es de HOY. Continúo…"
+          echo "Hay al menos una base vieja. Sigo…"
 
-      - name: Run script
+      - name: Run script (descarga, hash, hoja1, diffs)
         env:
           WORKDIR: ${{ github.workspace }}
-          IMSA_PASSWORD: ${{ secrets.IMSA_PASSWORD }}   # opcional, si lo usás
+          IMSA_PASSWORD: ${{ secrets.IMSA_PASSWORD }}    # ponelo si usás IMSA
           BORRAR_DUPLICADO: "true"
         run: |
+          set -e
           python hash_comparativo.py
 
+      # ===== Construir índices JSON para que la web muestre frescura =====
       - name: Build public_reports/index.json
         run: |
           python - <<'PY'
           import json
           from pathlib import Path
-          root = Path("public_reports")
-          root.mkdir(exist_ok=True, parents=True)
-          items = []
+          root = Path("public_reports"); root.mkdir(parents=True, exist_ok=True)
+          items=[]
           for p in root.glob("*.xlsx"):
-              st = p.stat()
-              items.append({
-                  "name": p.name,
-                  "url": f"public_reports/{p.name}",
-                  "size_kb": round(st.st_size / 1024, 1),
-                  "mtime": int(st.st_mtime)
-              })
-          items.sort(key=lambda x: x["mtime"], reverse=True)
+              st=p.stat()
+              items.append({"name":p.name,"url":f"public_reports/{p.name}","size_kb":round(st.st_size/1024,1),"mtime":int(st.st_mtime)})
+          items.sort(key=lambda x:x["mtime"], reverse=True)
           (root/"index.json").write_text(json.dumps(items, indent=2, ensure_ascii=False), encoding="utf-8")
-          print(f"Index con {len(items)} reportes.")
+          print(f"index.json con {len(items)} reportes")
           PY
+
+      - name: Build public_listas/index.json
+        run: |
+          python - <<'PY'
+          import json, time
+          from pathlib import Path
+          root = Path("public_listas"); root.mkdir(parents=True, exist_ok=True)
+          items=[]
+          for p in root.glob("*_ULTIMA.xlsx"):
+              st=p.stat()
+              items.append({"name":p.name,"url":f"public_listas/{p.name}","size_kb":round(st.st_size/1024,1),"mtime":int(st.st_mtime)})
+          items.sort(key=lambda x:x["mtime"], reverse=True)
+          (root/"index.json").write_text(json.dumps(items, indent=2, ensure_ascii=False), encoding="utf-8")
+          print("public_listas/index.json generado")
+          PY
+
+      - name: Log: diff y listado
+        run: |
+          echo "Archivos cambiados:"
+          git status --porcelain
+          echo "Listado public_listas:"
+          ls -lh public_listas || true
+          echo "Listado public_db:"
+          ls -lh public_db || true
+          echo "Listado public_reports:"
+          ls -lh public_reports || true
 
       - name: Commit & Push (main)
         run: |
@@ -139,45 +140,8 @@ PY
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
           if git diff --cached --quiet; then
-            echo "Sin cambios para commitear (main)."
+            echo "Sin cambios para commitear."
           else
-            git commit -m "CI: actualizar bases, hojas y reportes"
+            git commit -m "CI: actualizar bases, hojas (index.json) y reportes"
             git push
           fi
-
-      # ====== Publicar a gh-pages (si usás esa rama para Pages) ======
-      - name: Preparar carpeta publish
-        run: |
-          rm -rf publish
-          mkdir -p publish
-          cp -r public_listas publish/ || true
-          cp -r public_reports publish/ || true
-          cp -r public_db publish/ || true
-          cp index.html publish/ || true
-          touch publish/.nojekyll
-
-      - name: Publicar a gh-pages
-        run: |
-          set -e
-          git fetch origin gh-pages || true
-          if git ls-remote --exit-code origin gh-pages >/dev/null 2>&1; then
-            git switch gh-pages
-          else
-            git checkout --orphan gh-pages
-            rm -rf *
-          fi
-
-          rm -rf public_listas public_reports public_db index.html .nojekyll
-          cp -r publish/* .
-          git add -A
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          if git diff --cached --quiet; then
-            echo "gh-pages sin cambios."
-          else
-            git commit -m "CI: publicar a gh-pages"
-            git push origin gh-pages
-          fi
-
-          # regresar a la rama previa (no estrictamente necesario)
-          git switch - || true
