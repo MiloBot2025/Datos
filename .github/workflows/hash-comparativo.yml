@@ -2,7 +2,7 @@ name: HashComparativo (main)
 
 on:
   schedule:
-    - cron: "*/5 * * * *"     # GitHub no garantiza cada 1', usa 5'
+    - cron: "*/5 * * * *"      # GitHub no garantiza 1'; usa 5'
   workflow_dispatch:
 
 permissions:
@@ -30,29 +30,36 @@ jobs:
           WORKDIR: ${{ github.workspace }}
           IMSA_PASSWORD: ${{ secrets.IMSA_PASSWORD }}
           BORRAR_DUPLICADO: "true"
-          #FORCE_HOJA1: "true"   # destapá si querés forzar siempre Stock V
+          #FORCE_HOJA1: "true"   # destapar si querés forzar siempre Stock V
         run: python hash_comparativo.py
 
-      - name: Build indices (public_reports / public_listas)
+      - name: Build public_reports index.json
+        shell: python
         run: |
-          python - <<'PY'
           import json
           from pathlib import Path
-          for root_dir, pattern in (('public_reports','*.xlsx'), ('public_listas','*_ULTIMA.xlsx')):
-              root = Path(root_dir); root.mkdir(parents=True, exist_ok=True)
-              items=[]
-              for p in root.glob(pattern):
-                  st=p.stat()
-                  items.append({
-                      "name": p.name,
-                      "url": f"{root_dir}/{p.name}",
-                      "size_kb": round(st.st_size/1024,1),
-                      "mtime": int(st.st_mtime)
-                  })
-              items.sort(key=lambda x:x["mtime"], reverse=True)
-              (root/"index.json").write_text(json.dumps(items, indent=2, ensure_ascii=False), encoding="utf-8")
-          print("indices listos")
-PY
+          root = Path("public_reports"); root.mkdir(parents=True, exist_ok=True)
+          items=[]
+          for p in root.glob("*.xlsx"):
+              st=p.stat()
+              items.append({"name":p.name,"url":f"public_reports/{p.name}","size_kb":round(st.st_size/1024,1),"mtime":int(st.st_mtime)})
+          items.sort(key=lambda x:x["mtime"], reverse=True)
+          (root/"index.json").write_text(json.dumps(items, indent=2, ensure_ascii=False), encoding="utf-8")
+          print(f"index.json con {len(items)} reportes")
+
+      - name: Build public_listas index.json
+        shell: python
+        run: |
+          import json
+          from pathlib import Path
+          root = Path("public_listas"); root.mkdir(parents=True, exist_ok=True)
+          items=[]
+          for p in root.glob("*_ULTIMA.xlsx"):
+              st=p.stat()
+              items.append({"name":p.name,"url":f"public_listas/{p.name}","size_kb":round(st.st_size/1024,1),"mtime":int(st.st_mtime)})
+          items.sort(key=lambda x:x["mtime"], reverse=True)
+          (root/"index.json").write_text(json.dumps(items, indent=2, ensure_ascii=False), encoding="utf-8")
+          print("public_listas/index.json generado")
 
       - name: List & commit
         run: |
