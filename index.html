@@ -21,13 +21,9 @@
     header{display:flex;align-items:center;justify-content:space-between;margin:0 0 18px}
     .brand{display:flex;align-items:center;gap:14px}
 
-    /* === Logo grande y sin marco === */
-    .logoBox{
-      width:auto; height:auto; padding:0; background:transparent; border:none; box-shadow:none; display:block;
-    }
-    .logoBox img{
-      max-height:150px; width:auto; height:auto; object-fit:contain; display:block;
-    }
+    /* Logo grande y sin marco */
+    .logoBox{ width:auto; height:auto; padding:0; background:transparent; border:none; box-shadow:none; display:block; }
+    .logoBox img{ max-height:150px; width:auto; height:auto; object-fit:contain; display:block; }
 
     h1{font-size:20px;margin:0}
     .toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
@@ -71,7 +67,6 @@
     <header>
       <div class="brand">
         <div class="logoBox">
-          <!-- El src se decide por JS, con cache-busting y fallback de nombres -->
           <img id="brandLogo" data-src="assets/dmxpro-logo.png" alt="DMX PRO logo">
         </div>
         <div>
@@ -81,12 +76,9 @@
       </div>
       <div class="toolbar">
         <span class="pill ok" id="onlinePill">online</span>
-        <button class="btn" id="refreshBtn" title="Volver a cargar">
-          <span>↻</span> Actualizar
-        </button>
+        <button class="btn" id="refreshBtn" title="Volver a cargar"><span>↻</span> Actualizar</button>
         <label class="switch">
-          <input type="checkbox" id="autoToggle">
-          Auto-refresh <span class="small meta">(60s)</span>
+          <input type="checkbox" id="autoToggle"> Auto-refresh <span class="small meta">(60s)</span>
         </label>
       </div>
     </header>
@@ -98,7 +90,7 @@
       </section>
 
       <section class="card half" id="listas">
-        <h2>Últimas “Hoja 1”</h2>
+        <h2>Stock V</h2>
         <ul id="listasList"><li class="meta">Cargando…</li></ul>
       </section>
 
@@ -125,37 +117,32 @@
   const bust = (u) => u + (u.includes('?')?'&':'?') + 'ts=' + Date.now();
   const $ = (s)=>document.querySelector(s);
 
-  // Estado online + hora
+  // Hora y estado
   const setLastUpdate = ()=> $('#lastUpdate').textContent = toAR.format(new Date());
   setLastUpdate();
   const onlinePill = $('#onlinePill');
   const updOnline=()=>{onlinePill.textContent=navigator.onLine?'online':'offline';onlinePill.className='pill '+(navigator.onLine?'ok':'err');};
   addEventListener('online',updOnline); addEventListener('offline',updOnline); updOnline();
 
-  // HEAD helper (para validar existencia de archivos)
+  // Helpers fetch/HEAD
   async function headOK(url){ try{ const r=await fetch(url,{method:'HEAD',cache:'no-store'}); return r.ok; }catch{return false;} }
 
-  // ===== LOGO: intentamos dataset primero, luego candidatos comunes =====
+  // Logo (con fallback de nombres)
   (async function loadLogo(){
     const img = $('#brandLogo');
-    const initial = img.dataset.src;
     const candidates = [
-      initial,
-      'assets/DMX%20SRL%20(1500%20x%20500%20px).png', // con espacios escapados
-      'assets/DMX SRL (1500 x 500 px).png',           // sin escapar
-      'assets/logo.png',
-      'assets/logo.jpg'
+      img.dataset.src,
+      'assets/DMX%20SRL%20(1500%20x%20500%20px).png',
+      'assets/DMX SRL (1500 x 500 px).png',
+      'assets/logo.png','assets/logo.jpg'
     ];
-    let found = null;
     for (const p of candidates){
-      if (!p) continue;
-      if (await headOK(bust(p)) || await headOK(p)) { found = p; break; }
+      if (p && (await headOK(bust(p)) || await headOK(p))){ img.src=bust(p); return; }
     }
-    if (found) { img.src = bust(found); }
-    else { img.remove(); const box=document.querySelector('.logoBox'); box.textContent='DMX PRO'; box.style.fontWeight='700'; }
+    img.remove(); document.querySelector('.logoBox').textContent='DMX PRO';
   })();
 
-  // ========= Fuentes =========
+  // ===== Fuentes =====
   const FUENTES = {
     Tevelam:   { listaNames: ["Tevelam_ULTIMA.xlsx"],    dbName: "Tevelam_DB.xlsx" },
     Disco_Pro: { listaNames: ["Disco_Pro_ULTIMA.xlsx"],  dbName: "Disco_Pro_DB.xlsx" },
@@ -171,7 +158,7 @@
     return null;
   }
 
-  // ========= Bases =========
+  // ===== Bases =====
   async function renderBases(){
     const ul = $('#basesList'); ul.innerHTML = '';
     const todayStr = toARDay.format(new Date());
@@ -202,16 +189,38 @@
     }
   }
 
-  // ========= Listas (Hoja 1) =========
+  // ===== Stock V (Hoja 1) con “hoy / no hoy” =====
   async function renderListas(){
     const ul = $('#listasList'); ul.innerHTML = '';
+
+    // Índice con mtimes para saber si es de hoy
+    let idx = {};
+    try{
+      const r = await fetch(bust('public_listas/index.json'), {cache:'no-store'});
+      if (r.ok){
+        const arr = await r.json();
+        for (const it of arr) idx[it.name] = it;  // {name, url, size_kb, mtime}
+      }
+    }catch{}
+
     for (const key of Object.keys(FUENTES)){
       const found = await findFirstExisting('public_listas', FUENTES[key].listaNames);
       const li = document.createElement('li');
       if (found){
         const file = found.file;
+        const info = idx[file];
+        let extra = '';
+        if (info && info.mtime){
+          const when = new Date(info.mtime*1000);
+          const isToday = toARDay.format(new Date()) === toARDay.format(when);
+          extra = ` <span class="pill ${isToday?'ok':'warn'}">${isToday?'hoy':'no hoy'}</span>
+                    <span class="tag">${(info.size_kb||'–')} KB</span>
+                    <span class="meta">modificado: ${toAR.format(when)}</span>`;
+        } else {
+          extra = ` <span class="pill warn">sin índice</span>`;
+        }
         const copyUrl = location.origin + location.pathname + 'public_listas/' + file;
-        li.innerHTML = `<span class="grow">• <a href="${found.url}" download>${file}</a> <span class="pill ok">disponible</span></span>
+        li.innerHTML = `<span class="grow">• <a href="${found.url}" download>${file}</a>${extra}</span>
                         <span class="actions"><button class="btn small" data-copy="${copyUrl}">Copiar link</button></span>`;
       } else {
         li.innerHTML = `<span class="grow">• ${FUENTES[key].listaNames[0]} <span class="pill err">no encontrado</span></span>`;
@@ -220,7 +229,7 @@
     }
   }
 
-  // ========= Reportes =========
+  // ===== Reportes =====
   async function renderReportes(){
     const ul = $('#reportsList'); ul.innerHTML = '';
     const count = $('#countReports');
@@ -252,13 +261,12 @@
     }
   }
 
-  // ========= Acciones comunes =========
+  // ===== Acciones comunes =====
   async function renderAll(){
     setLastUpdate();
     await Promise.all([renderBases(), renderListas(), renderReportes()]);
   }
 
-  // Copiar link
   document.addEventListener('click', (ev)=>{
     const btn = ev.target.closest('button[data-copy]');
     if (!btn) return;
@@ -268,24 +276,17 @@
       setTimeout(()=>btn.textContent='Copiar link',1200);
     });
   });
-
-  // Buscar en reportes
   document.addEventListener('input', (ev)=>{
     if (ev.target && ev.target.id === 'searchReports') renderReportes();
   });
-
-  // Botón refrescar
   $('#refreshBtn').addEventListener('click', ()=>renderAll());
 
-  // Auto-refresh
-  const auto = $('#autoToggle');
-  let timer = null;
+  const auto = $('#autoToggle'); let timer=null;
   auto.addEventListener('change', ()=>{
-    if (auto.checked){ timer = setInterval(()=>renderAll(), 60000); renderAll(); }
-    else { clearInterval(timer); timer = null; }
+    if (auto.checked){ timer=setInterval(()=>renderAll(),60000); renderAll(); }
+    else { clearInterval(timer); timer=null; }
   });
 
-  // Primer render
   renderAll();
 })();
 </script>
