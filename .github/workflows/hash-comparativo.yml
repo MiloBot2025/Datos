@@ -2,7 +2,7 @@ name: HashComparativo (AR, main)
 
 on:
   schedule:
-    - cron: "*/5 * * * *"          # GitHub no garantiza 1 min; 5 min es lo más confiable
+    - cron: "*/5 * * * *"   # GitHub no garantiza cada 1', cada 5' sí
   workflow_dispatch:
 
 permissions:
@@ -12,144 +12,62 @@ jobs:
   run:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Setup Chrome (Selenium/IMSA)
-        uses: browser-actions/setup-chrome@v1
+      - uses: browser-actions/setup-chrome@v1
 
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
           pip install requests openpyxl selenium webdriver-manager
 
-      # ==== Ventana AR (solo se aplica cuando viene del cron) ====
-      - name: Guard ventana AR
-        if: ${{ github.event_name == 'schedule' }}
-        shell: bash
-        run: |
-          set -e
-          export TZ=America/Argentina/Buenos_Aires
-          DOW=$(date +%u)   # 1..7
-          H=$(date +%H)
-          M=$(date +%M)
-          echo "Ahora (AR): $(date '+%Y-%m-%d %H:%M:%S %Z')  DOW=$DOW H=$H M=$M"
-          if [ "$DOW" -gt 5 ]; then
-            echo "Fin de semana (AR). Salgo."
-            exit 0
-          fi
-          if [ "$H" -lt 7 ] || [ "$H" -gt 18 ] || { [ "$H" -eq 18 ] && [ "$M" -ne 00 ]; }; then
-            echo "Fuera de la ventana 07:00–18:00 AR. Salgo."
-            exit 0
-          fi
-          echo "Dentro de ventana. Sigo…"
-
-      # ==== Precheck (solo en cron): si TODAS las bases ya son de HOY, cortar ====
-      - name: Precheck: ¿todas las bases son de HOY (AR)?
-        if: ${{ github.event_name == 'schedule' }}
-        shell: bash
-        run: |
-          set -e
-          export TZ=America/Argentina/Buenos_Aires
-          export AR_TODAY=$(date +%F)
-          echo "AR_TODAY=$AR_TODAY"
-          if [ ! -d public_db ]; then
-            echo "No hay public_db todavía. Sigo…"
-            exit 0
-          fi
-          OUT=$(python - <<'PY'
-import json,glob,os,sys
-today=os.environ.get("AR_TODAY")
-paths=sorted(glob.glob("public_db/*_DB.meta.json"))
-if not paths:
-    print("NO_META"); sys.exit(0)
-all_today=True
-for p in paths:
-    try:
-        with open(p,encoding="utf-8") as f:
-            meta=json.load(f)
-        saved=str(meta.get("saved_at_ar",""))[:10]
-        if saved!=today:
-            all_today=False
-            break
-    except Exception:
-        all_today=False
-        break
-print("ALL_TODAY" if all_today else "NOT_ALL")
-PY
-)
-          echo "Precheck result: $OUT"
-          if [ "$OUT" = "ALL_TODAY" ]; then
-            echo "Todas son de HOY. Salgo para no gastar cuotas."
-            exit 0
-          fi
-          echo "Hay al menos una base vieja. Sigo…"
-
       - name: Run script (descarga, hash, hoja1, diffs)
         env:
           WORKDIR: ${{ github.workspace }}
-          IMSA_PASSWORD: ${{ secrets.IMSA_PASSWORD }}    # si usás IMSA
+          IMSA_PASSWORD: ${{ secrets.IMSA_PASSWORD }}
           BORRAR_DUPLICADO: "true"
-          #FORCE_HOJA1: "true"  # destapar si querés forzar que siempre regenere Stock V
-        run: |
-          set -e
-          python hash_comparativo.py
+          #FORCE_HOJA1: "true"   # destapá si querés forzar siempre Stock V
+        run: python hash_comparativo.py
 
-      # ==== Índices para la web ====
-      - name: Build public_reports/index.json
+      - name: Build indices (public_reports / public_listas)
+        shell: bash
         run: |
           python - <<'PY'
-import json
-from pathlib import Path
-root = Path("public_reports"); root.mkdir(parents=True, exist_ok=True)
-items=[]
-for p in root.glob("*.xlsx"):
-    st=p.stat()
-    items.append({"name":p.name,"url":f"public_reports/{p.name}","size_kb":round(st.st_size/1024,1),"mtime":int(st.st_mtime)})
-items.sort(key=lambda x:x["mtime"], reverse=True)
-(root/"index.json").write_text(json.dumps(items, indent=2, ensure_ascii=False), encoding="utf-8")
-print(f"index.json con {len(items)} reportes")
+          import json
+          from pathlib import Path
+          for root_dir in ("public_reports","public_listas"):
+              root = Path(root_dir); root.mkdir(parents=True, exist_ok=True)
+              pattern = "*.xlsx" if root_dir=="public_reports" else "*_ULTIMA.xlsx"
+              items=[]
+              for p in root.glob(pattern):
+                  st=p.stat()
+                  items.append({
+                      "name": p.name,
+                      "url": f"{root_dir}/{p.name}",
+                      "size_kb": round(st.st_size/1024,1),
+                      "mtime": int(st.st_mtime)
+                  })
+              items.sort(key=lambda x: x["mtime"], reverse=True)
+              (root/"index.json").write_text(json.dumps(items, indent=2, ensure_ascii=False), encoding="utf-8")
+          print("indices listos")
 PY
 
-      - name: Build public_listas/index.json
+      - name: List & commit
+        shell: bash
         run: |
-          python - <<'PY'
-import json
-from pathlib import Path
-root = Path("public_listas"); root.mkdir(parents=True, exist_ok=True)
-items=[]
-for p in root.glob("*_ULTIMA.xlsx"):
-    st=p.stat()
-    items.append({"name":p.name,"url":f"public_listas/{p.name}","size_kb":round(st.st_size/1024,1),"mtime":int(st.st_mtime)})
-items.sort(key=lambda x:x["mtime"], reverse=True)
-(root/"index.json").write_text(json.dumps(items, indent=2, ensure_ascii=False), encoding="utf-8")
-print("public_listas/index.json generado")
-PY
-
-      - name: Log: diff y listado
-        run: |
-          echo "Archivos cambiados:"
-          git status --porcelain
-          echo "Listado public_listas:"
-          ls -lh public_listas || true
-          echo "Listado public_db:"
-          ls -lh public_db || true
-          echo "Listado public_reports:"
-          ls -lh public_reports || true
-
-      - name: Commit & Push (main)
-        run: |
+          echo "public_listas:"; ls -lh public_listas || true
+          echo "public_reports:"; ls -lh public_reports || true
+          echo "public_db:"; ls -lh public_db || true
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
           if git diff --cached --quiet; then
             echo "Sin cambios para commitear."
           else
-            git commit -m "CI: actualizar bases, hojas (index.json) y reportes"
+            git commit -m "CI: actualizar outputs"
             git push
           fi
