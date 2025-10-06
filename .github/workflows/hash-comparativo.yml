@@ -30,7 +30,7 @@ jobs:
           WORKDIR: ${{ github.workspace }}
           IMSA_PASSWORD: ${{ secrets.IMSA_PASSWORD }}
           BORRAR_DUPLICADO: "true"
-          #FORCE_HOJA1: "true"   # destapá si querés forzar siempre Stock V
+          #FORCE_HOJA1: "true"    # destapá si querés forzar siempre Stock V
         run: python hash_comparativo.py
 
       - name: Build indices (public_reports / public_listas)
