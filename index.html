@@ -20,12 +20,15 @@
     .wrap{max-width:1100px;margin:28px auto;padding:0 16px}
     header{display:flex;align-items:center;justify-content:space-between;margin:0 0 18px}
     .brand{display:flex;align-items:center;gap:14px}
+
+    /* === Logo grande y sin marco === */
     .logoBox{
-      width:160px; height:44px; display:grid; place-items:center;
-      border-radius:12px; background:rgba(30,91,255,.08); border:1px solid rgba(30,91,255,.25);
-      box-shadow:0 4px 18px rgba(30,91,255,.2), inset 0 0 0 1px rgba(255,255,255,.04)
+      width:auto; height:auto; padding:0; background:transparent; border:none; box-shadow:none; display:block;
     }
-    .logoBox img{ max-height:30px; width:auto; object-fit:contain; display:block }
+    .logoBox img{
+      max-height:150px; width:auto; height:auto; object-fit:contain; display:block;
+    }
+
     h1{font-size:20px;margin:0}
     .toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
     .btn{
@@ -68,7 +71,7 @@
     <header>
       <div class="brand">
         <div class="logoBox">
-          <!-- Ponemos el src por JS con cache-busting -->
+          <!-- El src se decide por JS, con cache-busting y fallback de nombres -->
           <img id="brandLogo" data-src="assets/dmxpro-logo.png" alt="DMX PRO logo">
         </div>
         <div>
@@ -122,16 +125,35 @@
   const bust = (u) => u + (u.includes('?')?'&':'?') + 'ts=' + Date.now();
   const $ = (s)=>document.querySelector(s);
 
-  // Logo con cache-busting
-  const logo = $('#brandLogo');
-  logo.src = bust(logo.dataset.src);
-
-  // Hora AR y estado online
-  const setLastUpdate = ()=> $('#lastUpdate').textContent = toAR.format(new Date()) + '';
+  // Estado online + hora
+  const setLastUpdate = ()=> $('#lastUpdate').textContent = toAR.format(new Date());
   setLastUpdate();
   const onlinePill = $('#onlinePill');
   const updOnline=()=>{onlinePill.textContent=navigator.onLine?'online':'offline';onlinePill.className='pill '+(navigator.onLine?'ok':'err');};
-  window.addEventListener('online',updOnline); window.addEventListener('offline',updOnline); updOnline();
+  addEventListener('online',updOnline); addEventListener('offline',updOnline); updOnline();
+
+  // HEAD helper (para validar existencia de archivos)
+  async function headOK(url){ try{ const r=await fetch(url,{method:'HEAD',cache:'no-store'}); return r.ok; }catch{return false;} }
+
+  // ===== LOGO: intentamos dataset primero, luego candidatos comunes =====
+  (async function loadLogo(){
+    const img = $('#brandLogo');
+    const initial = img.dataset.src;
+    const candidates = [
+      initial,
+      'assets/DMX%20SRL%20(1500%20x%20500%20px).png', // con espacios escapados
+      'assets/DMX SRL (1500 x 500 px).png',           // sin escapar
+      'assets/logo.png',
+      'assets/logo.jpg'
+    ];
+    let found = null;
+    for (const p of candidates){
+      if (!p) continue;
+      if (await headOK(bust(p)) || await headOK(p)) { found = p; break; }
+    }
+    if (found) { img.src = bust(found); }
+    else { img.remove(); const box=document.querySelector('.logoBox'); box.textContent='DMX PRO'; box.style.fontWeight='700'; }
+  })();
 
   // ========= Fuentes =========
   const FUENTES = {
@@ -141,7 +163,6 @@
     IMSA:      { listaNames: ["IMSA_ULTIMA.xlsx","ListaImsa_ULTIMA.xlsx"], dbName: "IMSA_DB.xlsx" }
   };
 
-  async function headOK(url){ try{ const r=await fetch(url,{method:'HEAD',cache:'no-store'}); return r.ok; }catch{return false;} }
   async function findFirstExisting(basePath, names){
     for (const n of names){
       const raw = `${basePath}/${n}`;
@@ -167,7 +188,7 @@
             const m = await r.json();
             const saved = (m.saved_at_ar||'').slice(0,19);
             const sha = (m.sha256||'').slice(0,12)+'…';
-            const isToday = (m.saved_at_ar||'').slice(0,10) === (new Date()).toISOString().slice(0,10) || todayStr === (m.saved_at_ar||'').slice(0,10);
+            const isToday = todayStr === (m.saved_at_ar||'').slice(0,10);
             trailing = ` <span class="pill ${isToday?'ok':'warn'}">${isToday?'hoy':'no hoy'}</span> <span class="meta">sha256: <code>${sha}</code> · guardado AR: ${saved}</span>`;
           }
         }catch{}
@@ -188,10 +209,9 @@
       const found = await findFirstExisting('public_listas', FUENTES[key].listaNames);
       const li = document.createElement('li');
       if (found){
-        const file = found.file; // sin ?ts
-        const shown = file;
+        const file = found.file;
         const copyUrl = location.origin + location.pathname + 'public_listas/' + file;
-        li.innerHTML = `<span class="grow">• <a href="${found.url}" download>${shown}</a> <span class="pill ok">disponible</span></span>
+        li.innerHTML = `<span class="grow">• <a href="${found.url}" download>${file}</a> <span class="pill ok">disponible</span></span>
                         <span class="actions"><button class="btn small" data-copy="${copyUrl}">Copiar link</button></span>`;
       } else {
         li.innerHTML = `<span class="grow">• ${FUENTES[key].listaNames[0]} <span class="pill err">no encontrado</span></span>`;
@@ -215,8 +235,8 @@
       for (const it of list){
         const href = bust(it.url || ('public_reports/'+it.name));
         const when = new Date((it.mtime||0)*1000);
+        const isToday = toARDay.format(new Date()) === toARDay.format(when);
         const arWhen = isNaN(when) ? '—' : toAR.format(when);
-        const isToday = !isNaN(when) && (toARDay.format(new Date()) === toARDay.format(when));
         const size = (it.size_kb!=null? `${it.size_kb.toLocaleString('es-AR')} KB` : '—');
         const copyUrl = location.origin + location.pathname + (it.url || ('public_reports/'+it.name));
         const li = document.createElement('li');
@@ -250,7 +270,9 @@
   });
 
   // Buscar en reportes
-  $('#searchReports').addEventListener('input', ()=>renderReportes());
+  document.addEventListener('input', (ev)=>{
+    if (ev.target && ev.target.id === 'searchReports') renderReportes();
+  });
 
   // Botón refrescar
   $('#refreshBtn').addEventListener('click', ()=>renderAll());
