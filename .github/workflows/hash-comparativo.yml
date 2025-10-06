@@ -2,7 +2,7 @@ name: HashComparativo (AR, main)
 
 on:
   schedule:
-    - cron: "*/3 * * * *"        # se dispara cada 30' (el guard limita por horario AR)
+    - cron: "*/1 * * * *"        # se dispara cada 30' (el guard limita por horario AR)
   workflow_dispatch:
 
 permissions:
