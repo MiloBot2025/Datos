@@ -1,32 +1,16 @@
-# Bytecode / caches
+# Python
 __pycache__/
 *.pyc
-*.pyo
-*.pyd
 
-# Entornos locales (opcionales)
-.venv/
-venv/
-.env
-
-# Salidas temporales del script (NO publicar)
-run_out/
+# Directorios efímeros locales (OK ignorarlos)
 downloads/
 _reports/
 _snapshots/
 _hashdb/
 site/
 
-# === Artefactos que SÍ queremos PUBLICAR en GitHub Pages ===
-# (aseguramos que se incluyan aunque exista una regla global)
-!public_db/
-!public_db/**
-
-!public_listas/
-!public_listas/**
-
-!public_reports/
-!public_reports/**
-
-# Misceláneos
-.DS_Store
+# Importante: NO ignores estos (se deben commitear):
+# _db/
+# public_db/
+# public_listas/
+# public_reports/
