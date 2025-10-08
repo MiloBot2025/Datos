@@ -305,13 +305,24 @@ def extraer_extra_hoja1(path: Path) -> List[Dict[str, Any]]:
 
 # IMSA Hoja1 (SOLO 'con stock') — incluye estrictamente líneas cuyo estado sea "con stock"
 def extraer_imsa_hoja1(path: Path) -> List[Dict[str, Any]]:
+    """Genera la Hoja 1 de IMSA filtrando **solo** los artículos "con stock".
+
+    La normalización de stock es estricta: únicamente se aceptan filas cuyo
+    estado, tras limpiar espacios y tildes, sea exactamente ``"con stock"``.
+    Esto respeta el requerimiento de que IMSA entregue una lista depurada sin
+    reutilizar el mapeo genérico de stock.
     """
-    IMSA → Stock V: incluir SOLO las filas cuyo estado sea 'con stock' (match exacto, case/tildes-insensitive).
-    La DB copia exacta NO se filtra; esto aplica únicamente a la salida tipo 'Hoja 1'.
-    """
+
     def _is_con_stock(v: Any) -> bool:
-        t = " ".join((_norm_text_lc(v) or "").split())  # normaliza espacios
-        return t == "con stock"
+        """Retorna True solo si el texto corresponde a ``"con stock"``."""
+        normalizado = " ".join((_norm_text_lc(v) or "").split())
+        return normalizado == "con stock"
+
+    def _normalizar_codigo_bruto(cod: Any) -> Optional[str]:
+        texto = _norm_text(cod)
+        if not texto:
+            return None
+        return texto.split("-", 2)[-1] if texto.count("-") >= 2 else texto
 
     out: List[Dict[str, Any]] = []
     wb = load_workbook(path, read_only=True, data_only=True)
@@ -319,6 +330,7 @@ def extraer_imsa_hoja1(path: Path) -> List[Dict[str, Any]]:
         target_ws = None
         header_row = None
         cols = {"codigo": None, "stock": None, "precio": None, "moneda": None}
+
         # Intento por encabezados
         for ws in wb.worksheets:
             hr, c = detectar_columnas(ws)
@@ -330,12 +342,12 @@ def extraer_imsa_hoja1(path: Path) -> List[Dict[str, Any]]:
         if not target_ws:
             target_ws = wb.active
             for row in target_ws.iter_rows(min_row=8, min_col=1, max_col=max(target_ws.max_column, 1), values_only=True):
-                cod = row[0] if len(row) >= 1 else None
+                cod_final = _normalizar_codigo_bruto(row[0] if len(row) >= 1 else None)
+                if not cod_final:
+                    continue
                 stx = row[7] if len(row) >= 8 else None  # col H
-                if not _norm_text(cod): continue
-                if not _is_con_stock(stx): continue
-                s_cod = _norm_text(cod)
-                cod_final = s_cod.split("-", 2)[-1] if s_cod.count("-") >= 2 else s_cod
+                if not _is_con_stock(stx):
+                    continue
                 out.append({"ID": cod_final, "Stock": 6, "Precio": None, "Moneda": None})
             return out
 
@@ -344,14 +356,14 @@ def extraer_imsa_hoja1(path: Path) -> List[Dict[str, Any]]:
 
         if use_header_path:
             for row in target_ws.iter_rows(min_row=header_row+1, min_col=1, max_col=max_needed_col, values_only=True):
-                cod = row[cols["codigo"]-1] if cols["codigo"] else None
-                if not _norm_text(cod): continue
+                cod_final = _normalizar_codigo_bruto(row[cols["codigo"]-1] if cols["codigo"] else None)
+                if not cod_final:
+                    continue
                 stx = row[cols["stock"]-1] if cols["stock"] else None
-                if not _is_con_stock(stx): continue
+                if not _is_con_stock(stx):
+                    continue
                 precio = row[cols["precio"]-1] if cols["precio"] else None
                 moneda = row[cols["moneda"]-1] if cols["moneda"] else None
-                s_cod = _norm_text(cod)
-                cod_final = s_cod.split("-", 2)[-1] if s_cod.count("-") >= 2 else s_cod
                 out.append({
                     "ID": cod_final,
                     "Stock": 6,
@@ -361,12 +373,12 @@ def extraer_imsa_hoja1(path: Path) -> List[Dict[str, Any]]:
         else:
             # Encabezados detectados pero sin columna “stock”: fallback por posición (stock = col 8)
             for row in target_ws.iter_rows(min_row=8, min_col=1, max_col=max(target_ws.max_column, 1), values_only=True):
-                cod = row[0] if len(row) >= 1 else None
+                cod_final = _normalizar_codigo_bruto(row[0] if len(row) >= 1 else None)
+                if not cod_final:
+                    continue
                 stx = row[7] if len(row) >= 8 else None
-                if not _norm_text(cod): continue
-                if not _is_con_stock(stx): continue
-                s_cod = _norm_text(cod)
-                cod_final = s_cod.split("-", 2)[-1] if s_cod.count("-") >= 2 else s_cod
+                if not _is_con_stock(stx):
+                    continue
                 out.append({"ID": cod_final, "Stock": 6, "Precio": None, "Moneda": None})
     finally:
         wb.close()
