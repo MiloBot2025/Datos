@@ -43,7 +43,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y jq
 
-      - name: Ensure public dirs and placeholders
+      - name: Ensure public dirs & placeholders
         shell: bash
         run: |
           set -e
@@ -54,13 +54,14 @@ jobs:
           [ -f public_listas/index.json ]  || echo "[]" > public_listas/index.json
           [ -f public_reports/index.json ] || echo "[]" > public_reports/index.json
 
+      # Window Mon–Fri 07:00–18:00 (Argentina)
       - name: Guard ventana AR
         id: guard
         shell: bash
         run: |
           set -e
           export TZ=America/Argentina/Buenos_Aires
-          DOW=$(date +%u)
+          DOW=$(date +%u)   # 1..7
           H=$(date +%H)
           NOW=$(date '+%Y-%m-%d %H:%M:%S %Z')
           echo "Ahora (AR): $NOW  DOW=$DOW H=$H"
@@ -70,13 +71,14 @@ jobs:
             exit 0
           fi
           if [ "$H" -lt 7 ] || [ "$H" -ge 18 ]; then
-            echo "Fuera de ventana 07:00-18:00 (AR). Salgo."
+            echo "Fuera de ventana 07:00–18:00 (AR). Salgo."
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          echo "Dentro de ventana. Sigo..."
+          echo "Dentro de ventana. Sigo…"
 
-      - name: Precheck all DBs are TODAY (AR)
+      # If ALL DB metas are from today (AR), skip the rest
+      - name: Precheck: metas are from today (AR)?
         id: precheck
         if: ${{ steps.guard.outputs.skip != 'true' }}
         shell: bash
@@ -88,7 +90,7 @@ jobs:
           shopt -s nullglob
           metas=(public_db/*_DB.meta.json)
           if [ ${#metas[@]} -eq 0 ]; then
-            echo "No hay metas → no salto."
+            echo "No meta files → do not skip."
             exit 0
           fi
           all_today=true
@@ -118,45 +120,42 @@ jobs:
         if: ${{ steps.guard.outputs.skip != 'true' && steps.precheck.outputs.skip != 'true' }}
         shell: bash
         run: |
-          python - <<'PY'
-import json, subprocess
-from pathlib import Path
+          set -e
+          build_idx () {
+            dir="$1"; pattern="$2"; out="$dir/index.json"
+            mkdir -p "$dir"
+            shopt -s nullglob
+            files=( "$dir"/$pattern )
+            if [ ${#files[@]} -eq 0 ]; then
+              echo "[]" > "$out"
+              echo "$out vacío"
+              return
+            fi
+            tmp=$(mktemp)
+            : > "$tmp"
+            for f in "${files[@]}"; do
+              [ -f "$f" ] || continue
+              name=$(basename "$f")
+              bytes=$(stat -c %s "$f")
+              size_kb=$(( (bytes + 512) / 1024 ))
+              mtime_commit=$(git log -1 --format=%ct -- "$f" || true)
+              if [ -z "$mtime_commit" ]; then mtime_commit=$(stat -c %Y "$f"); fi
+              jq -n \
+                --arg name "$name" \
+                --arg url "$dir/$name" \
+                --argjson size_kb "$size_kb" \
+                --argjson mtime "$mtime_commit" \
+                '{name:$name,url:$url,size_kb:$size_kb,mtime:$mtime,mtime_commit:$mtime}' \
+                >> "$tmp"
+            done
+            jq -s 'sort_by(.mtime) | reverse' "$tmp" > "$out"
+            rm -f "$tmp"
+            echo "$out generado"
+          }
+          build_idx "public_reports" "*.xlsx"
+          build_idx "public_listas" "*_ULTIMA.xlsx"
 
-def git_mtime(p: Path):
-    try:
-        out = subprocess.check_output(
-            ["git","log","-1","--format=%ct","--",str(p)], text=True
-        ).strip()
-        return int(out) if out else None
-    except Exception:
-        return None
-
-def build(dir_path: str, pattern: str, out_name: str):
-    root = Path(dir_path); root.mkdir(parents=True, exist_ok=True)
-    items=[]
-    for p in sorted(root.glob(pattern)):
-        if not p.is_file():
-            continue
-        st = p.stat()
-        t  = git_mtime(p) or int(st.st_mtime)
-        items.append({
-            "name": p.name,
-            "url": f"{dir_path}/{p.name}",
-            "size_kb": round(st.st_size/1024, 1),
-            "mtime": t,
-            "mtime_commit": t
-        })
-    items.sort(key=lambda x:x["mtime"], reverse=True)
-    (root/out_name).write_text(
-        json.dumps(items, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
-    print(f"{dir_path}/{out_name} con {len(items)} items")
-
-build("public_reports", "*.xlsx", "index.json")
-build("public_listas", "*_ULTIMA.xlsx", "index.json")
-PY
-
-      - name: List and commit (robusto)
+      - name: List & commit (robusto)
         if: ${{ steps.guard.outputs.skip != 'true' && steps.precheck.outputs.skip != 'true' }}
         shell: bash
         env:
