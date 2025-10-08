@@ -1,300 +1,331 @@
 <!doctype html>
 <html lang="es">
 <head>
-  <meta charset="utf-8" />
-  <title>DMX PRO · Listas y Reportes</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <meta name="color-scheme" content="dark light">
-  <link rel="icon" href="assets/dmxpro-logo.png">
-  <style>
-    :root{
-      --bg:#0c1118; --panel:#121a24; --ink:#e6edf3; --muted:#9fb0c3; --line:#1f2a36;
-      --acc:#1e5bff; --ok:#00d084; --warn:#ffb020; --err:#ff6b6b; --pill:#1b2430;
-    }
-    @media (prefers-color-scheme: light){
-      :root{ --bg:#f6f8fb; --panel:#ffffff; --ink:#0b1320; --muted:#5b6b7c; --line:#e6edf3; --acc:#1e5bff; --pill:#eef2f7; }
-    }
-    *{box-sizing:border-box}
-    html,body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue","Noto Sans",Arial}
-    a{color:var(--acc);text-decoration:none} a:hover{text-decoration:underline}
-    .wrap{max-width:1100px;margin:28px auto;padding:0 16px}
-    header{display:flex;align-items:center;justify-content:space-between;margin:0 0 18px}
-    .brand{display:flex;align-items:center;gap:14px}
+  <meta charset="utf-8" />
+  <title>DMX PRO · Listas y Reportes</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="color-scheme" content="dark light">
+  <link rel="icon" href="assets/dmxpro-logo.png">
+  <style>
+    :root{
+      --bg:#0c1118; --panel:#121a24; --ink:#e6edf3; --muted:#9fb0c3; --line:#1f2a36;
+      --acc:#1e5bff; --ok:#00d084; --warn:#ffb020; --err:#ff6b6b; --pill:#1b2430;
+    }
+    @media (prefers-color-scheme: light){
+      :root{ --bg:#f6f8fb; --panel:#ffffff; --ink:#0b1320; --muted:#5b6b7c; --line:#e6edf3; --acc:#1e5bff; --pill:#eef2f7; }
+    }
+    *{box-sizing:border-box}
+    html,body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue","Noto Sans",Arial}
+    a{color:var(--acc);text-decoration:none} a:hover{text-decoration:underline}
+    .wrap{max-width:1100px;margin:28px auto;padding:0 16px}
+    header{display:flex;align-items:center;justify-content:space-between;margin:0 0 18px}
+    .brand{display:flex;align-items:center;gap:14px}
 
-    /* Logo grande y sin marco (ajustá el alto con --logo-h) */
-    :root{ --logo-h: 156px; } /* <- si querés más/menos, cambiá este ÚNICO valor */
-    .logoBox{ width:auto; height:auto; padding:0; background:transparent; border:none; box-shadow:none; display:block; }
-    .logoBox img{ max-height:var(--logo-h); width:auto; height:auto; object-fit:contain; display:block; }
+    /* Logo grande y sin marco (ajustá el alto con --logo-h) */
+    :root{ --logo-h: 156px; } /* <- si querés más/menos, cambiá este ÚNICO valor */
+    .logoBox{ width:auto; height:auto; padding:0; background:transparent; border:none; box-shadow:none; display:block; }
+    .logoBox img{ max-height:var(--logo-h); width:auto; height:auto; object-fit:contain; display:block; }
 
-    h1{font-size:20px;margin:0}
-    .toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-    .btn{
-      background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 12px;cursor:pointer;
-      color:var(--ink);display:inline-flex;align-items:center;gap:8px
-    }
-    .btn:hover{box-shadow:0 2px 10px rgba(0,0,0,.15)}
-    .switch{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
-    .pill{display:inline-flex;align-items:center;gap:6px;background:var(--pill);border:1px solid var(--line);
-      padding:3px 8px;border-radius:999px;font-size:12px;color:var(--muted)}
-    .pill.ok{color:#12d7a5;background:rgba(18,215,165,.08);border-color:rgba(18,215,165,.25)}
-    .pill.warn{color:#ffb020;background:rgba(255,176,32,.08);border-color:rgba(255,176,32,.25)}
-    .pill.err{color:#ff6b6b;background:rgba(255,107,107,.08);border-color:rgba(255,107,107,.25)}
-    .meta{color:var(--muted);font-size:13px}
-    .grid{display:grid;gap:16px;grid-template-columns:repeat(12,1fr)}
-    .card{
-      grid-column: span 12; background:var(--panel); border:1px solid var(--line); border-radius:16px;
-      padding:16px; box-shadow:0 2px 20px rgba(0,0,0,.12)
-    }
-    @media(min-width:840px){ .card.half{grid-column: span 6} }
-    h2{font-size:18px;margin:0 0 10px}
-    ul{list-style:none;margin:6px 0 0;padding:0}
-    li{padding:10px 0;border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;gap:8px;align-items:center}
-    li:last-child{border-bottom:0}
-    .grow{flex:1 1 auto;min-width:220px}
-    .actions{display:flex;gap:6px}
-    .tag{font-size:12px;color:var(--muted);border:1px dashed var(--line);padding:2px 6px;border-radius:8px}
-    .search{display:flex;align-items:center;gap:8px;margin:8px 0 0}
-    .search input{
-      width:100%; padding:10px 12px; border:1px solid var(--line); background:transparent; color:var(--ink);
-      border-radius:10px; outline:none
-    }
-    .small{font-size:12px}
-    footer{color:var(--muted);font-size:12px;margin:18px 0 44px}
-    code{background:rgba(125,140,160,.13);border:1px solid var(--line);padding:.5px 6px;border-radius:6px}
-  </style>
+    h1{font-size:20px;margin:0}
+    .toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+    .btn{
+      background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 12px;cursor:pointer;
+      color:var(--ink);display:inline-flex;align-items:center;gap:8px
+    }
+    .btn:hover{box-shadow:0 2px 10px rgba(0,0,0,.15)}
+    .switch{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
+    .pill{display:inline-flex;align-items:center;gap:6px;background:var(--pill);border:1px solid var(--line);
+      padding:3px 8px;border-radius:999px;font-size:12px;color:var(--muted)}
+    .pill.ok{color:#12d7a5;background:rgba(18,215,165,.08);border-color:rgba(18,215,165,.25)}
+    .pill.warn{color:#ffb020;background:rgba(255,176,32,.08);border-color:rgba(255,176,32,.25)}
+    .pill.err{color:#ff6b6b;background:rgba(255,107,107,.08);border-color:rgba(255,107,107,.25)}
+    .meta{color:var(--muted);font-size:13px}
+    .grid{display:grid;gap:16px;grid-template-columns:repeat(12,1fr)}
+    .card{
+      grid-column: span 12; background:var(--panel); border:1px solid var(--line); border-radius:16px;
+      padding:16px; box-shadow:0 2px 20px rgba(0,0,0,.12)
+    }
+    @media(min-width:840px){ .card.half{grid-column: span 6} }
+    h2{font-size:18px;margin:0 0 10px}
+    ul{list-style:none;margin:6px 0 0;padding:0}
+    li{padding:10px 0;border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+    li:last-child{border-bottom:0}
+    .grow{flex:1 1 auto;min-width:220px}
+    .actions{display:flex;gap:6px}
+    .tag{font-size:12px;color:var(--muted);border:1px dashed var(--line);padding:2px 6px;border-radius:8px}
+    .search{display:flex;align-items:center;gap:8px;margin:8px 0 0}
+    .search input{
+      width:100%; padding:10px 12px; border:1px solid var(--line); background:transparent; color:var(--ink);
+      border-radius:10px; outline:none
+    }
+    .small{font-size:12px}
+    footer{color:var(--muted);font-size:12px;margin:18px 0 44px}
+    code{background:rgba(125,140,160,.13);border:1px solid var(--line);padding:.5px 6px;border-radius:6px}
+  </style>
 </head>
 <body>
-  <div class="wrap">
-    <header>
-      <div class="brand">
-        <div class="logoBox">
-          <img id="brandLogo" data-src="assets/dmxpro-logo.png" alt="DMX PRO logo">
-        </div>
-        <div>
-          <h1>DMX PRO · Listas y Reportes</h1>
-          <div class="meta">Última actualización (AR): <span id="lastUpdate">—</span></div>
-        </div>
-      </div>
-      <div class="toolbar">
-        <span class="pill ok" id="onlinePill">online</span>
-        <button class="btn" id="refreshBtn" title="Volver a cargar"><span>↻</span> Actualizar</button>
-        <label class="switch">
-          <input type="checkbox" id="autoToggle"> Auto-refresh <span class="small meta">(60s)</span>
-        </label>
-      </div>
-    </header>
+  <div class="wrap">
+    <header>
+      <div class="brand">
+        <div class="logoBox">
+          <img id="brandLogo" data-src="assets/dmxpro-logo.png" alt="DMX PRO logo">
+        </div>
+        <div>
+          <h1>DMX PRO · Listas y Reportes</h1>
+          <div class="meta">Última actualización (AR): <span id="lastUpdate">—</span></div>
+        </div>
+      </div>
+      <div class="toolbar">
+        <span class="pill ok" id="onlinePill">online</span>
+        <button class="btn" id="refreshBtn" title="Volver a cargar"><span>↻</span> Actualizar</button>
+        <label class="switch">
+          <input type="checkbox" id="autoToggle"> Auto-refresh <span class="small meta">(60s)</span>
+        </label>
+      </div>
+    </header>
 
-    <div class="grid">
-      <section class="card half" id="bases">
-        <h2>Bases (copia exacta)</h2>
-        <ul id="basesList"><li class="meta">Cargando…</li></ul>
-      </section>
+    <div class="grid">
+      <section class="card half" id="bases">
+        <h2>Bases (copia exacta)</h2>
+        <ul id="basesList"><li class="meta">Cargando…</li></ul>
+      </section>
 
-      <section class="card half" id="listas">
-        <h2>Stock V</h2>
-        <ul id="listasList"><li class="meta">Cargando…</li></ul>
-      </section>
+      <section class="card half" id="listas">
+        <h2>Stock V</h2>
+        <ul id="listasList"><li class="meta">Cargando…</li></ul>
+      </section>
 
-      <section class="card" id="reportes">
-        <h2>Reportes de cambios</h2>
-        <div class="search">
-          <input id="searchReports" type="search" placeholder="Buscar por nombre…">
-          <span class="pill" id="countReports">—</span>
-        </div>
-        <ul id="reportsList"><li class="meta">Cargando…</li></ul>
-      </section>
-    </div>
+      <section class="card" id="reportes">
+        <h2>Reportes de cambios</h2>
+        <div class="search">
+          <input id="searchReports" type="search" placeholder="Buscar por nombre…">
+          <span class="pill" id="countReports">—</span>
+        </div>
+        <ul id="reportsList"><li class="meta">Cargando…</li></ul>
+      </section>
+    </div>
 
-    <footer>
-      Si algo no se ve, probá refrescar fuerte (Ctrl/Cmd + F5). Esta página usa <code>?ts=</code> para evitar caché del CDN.
-    </footer>
-  </div>
+    <footer>
+      Si algo no se ve, probá refrescar fuerte (Ctrl/Cmd + F5). Esta página usa <code>?ts=</code> para evitar caché del CDN.
+    </footer>
+  </div>
 
 <script>
 (function(){
-  const toAR = new Intl.DateTimeFormat('es-AR',{dateStyle:'short',timeStyle:'medium',timeZone:'America/Argentina/Buenos_Aires'});
-  const toARDay = new Intl.DateTimeFormat('es-AR',{dateStyle:'short',timeZone:'America/Argentina/Buenos_Aires'});
-  const bust = (u) => u + (u.includes('?')?'&':'?') + 'ts=' + Date.now();
-  const $ = (s)=>document.querySelector(s);
+  const toAR = new Intl.DateTimeFormat('es-AR',{dateStyle:'short',timeStyle:'medium',timeZone:'America/Argentina/Buenos_Aires'});
+  const toARDay = new Intl.DateTimeFormat('es-AR',{dateStyle:'short',timeZone:'America/Argentina/Buenos_Aires'});
+  const bust = (u) => u + (u.includes('?')?'&':'?') + 'ts=' + Date.now();
+  const $ = (s)=>document.querySelector(s);
 
-  // Hora y estado
-  const setLastUpdate = ()=> $('#lastUpdate').textContent = toAR.format(new Date());
-  setLastUpdate();
-  const onlinePill = $('#onlinePill');
-  const updOnline=()=>{onlinePill.textContent=navigator.onLine?'online':'offline';onlinePill.className='pill '+(navigator.onLine?'ok':'err');};
-  addEventListener('online',updOnline); addEventListener('offline',updOnline); updOnline();
+  // Hora y estado
+  const setLastUpdate = ()=> $('#lastUpdate').textContent = toAR.format(new Date());
+  setLastUpdate();
+  const onlinePill = $('#onlinePill');
+  const updOnline=()=>{onlinePill.textContent=navigator.onLine?'online':'offline';onlinePill.className='pill '+(navigator.onLine?'ok':'err');};
+  addEventListener('online',updOnline); addEventListener('offline',updOnline); updOnline();
 
-  // Logo (con fallback)
-  async function headOK(url){ try{ const r=await fetch(url,{method:'HEAD',cache:'no-store'}); return r.ok; }catch{return false;} }
-  (async function loadLogo(){
-    const img = $('#brandLogo');
-    const candidates = [
-      img.dataset.src,
-      'assets/DMX%20SRL%20(1500%20x%20500%20px).png',
-      'assets/DMX SRL (1500 x 500 px).png',
-      'assets/logo.png','assets/logo.jpg'
-    ];
-    for (const p of candidates){
-      if (p && (await headOK(bust(p)) || await headOK(p))){ img.src=bust(p); return; }
-    }
-    img.remove(); document.querySelector('.logoBox').textContent='DMX PRO';
-  })();
+  // Logo (con fallback)
+  async function headOK(url){ try{ const r=await fetch(url,{method:'HEAD',cache:'no-store'}); return r.ok; }catch{return false;} }
+  (async function loadLogo(){
+    const img = $('#brandLogo');
+    const candidates = [
+      img.dataset.src,
+      'assets/DMX%20SRL%20(1500%20x%20500%20px).png',
+      'assets/DMX SRL (1500 x 500 px).png',
+      'assets/logo.png','assets/logo.jpg'
+    ];
+    for (const p of candidates){
+      if (p && (await headOK(bust(p)) || await headOK(p))){ img.src=bust(p); return; }
+    }
+    img.remove(); document.querySelector('.logoBox').textContent='DMX PRO';
+  })();
 
-  // Fuentes
-  const FUENTES = {
-    Tevelam:   { listaNames: ["Tevelam_ULTIMA.xlsx"],    dbName: "Tevelam_DB.xlsx" },
-    Disco_Pro: { listaNames: ["Disco_Pro_ULTIMA.xlsx"],  dbName: "Disco_Pro_DB.xlsx" },
-    ARS_Tech:  { listaNames: ["ARS_Tech_ULTIMA.xlsx"],   dbName: "ARS_Tech_DB.xlsx" },
-    IMSA:      { listaNames: ["IMSA_ULTIMA.xlsx","ListaImsa_ULTIMA.xlsx"], dbName: "IMSA_DB.xlsx" }
-  };
+  // Fuentes (Definición principal de proveedores)
+  const FUENTES = {
+    Tevelam:   { listaNames: ["Tevelam_ULTIMA.xlsx"],    dbName: "Tevelam_DB.xlsx" },
+    Disco_Pro: { listaNames: ["Disco_Pro_ULTIMA.xlsx"],  dbName: "Disco_Pro_DB.xlsx" },
+    ARS_Tech:  { listaNames: ["ARS_Tech_ULTIMA.xlsx"],   dbName: "ARS_Tech_DB.xlsx" },
+    IMSA:      { listaNames: ["ListaImsa_ULTIMA.xlsx"], dbName: "IMSA_DB.xlsx" }
+  };
 
-  async function findFirstExisting(basePath, names){
-    for (const n of names){
-      const raw = `${basePath}/${n}`;
-      if (await headOK(bust(raw))) return {url:bust(raw), file:n};
-    }
-    return null;
-  }
+  async function findFirstExisting(basePath, names){
+    for (const n of names){
+      const raw = `${basePath}/${n}`;
+      if (await headOK(bust(raw))) return {url:bust(raw), file:n};
+    }
+    return null;
+  }
 
-  // ===== Bases (fix "no hoy") =====
-  async function renderBases(){
-    const ul = $('#basesList'); ul.innerHTML = '';
-    const isoToday = new Date().toISOString().slice(0,10);
+  // ===== Bases (fix "no hoy") =====
+  async function renderBases(){
+    const ul = $('#basesList'); ul.innerHTML = '';
+    const isoToday = new Date().toISOString().slice(0,10);
 
-    for (const key of Object.keys(FUENTES)){
-      const db = `public_db/${FUENTES[key].dbName}`;
-      const meta = db.replace(/\.xlsx$/,".meta.json");
-      const li = document.createElement('li');
+    for (const key of Object.keys(FUENTES)){
+      const db = `public_db/${FUENTES[key].dbName}`;
+      const meta = db.replace(/\.xlsx$/,".meta.json");
+      const li = document.createElement('li');
 
-      if (await headOK(bust(db))){
-        let trailing = '';
-        try{
-          const r = await fetch(bust(meta), {cache:'no-store'});
-          if (r.ok){
-            const m = await r.json();
+      if (await headOK(bust(db))){
+        let trailing = '';
+        try{
+          const r = await fetch(bust(meta), {cache:'no-store'});
+          if (r.ok){
+            const m = await r.json();
 
-            // Usar saved_iso si existe; si no, intentar deducir ISO yyyy-mm-dd del string guardado
-            const saved_iso = (m.saved_iso) ||
-                              ((m.saved_at_ar||'').match(/^\d{4}-\d{2}-\d{2}/)?.[0]) ||
-                              null;
+            // Usar saved_iso si existe; si no, intentar deducir ISO yyyy-mm-dd del string guardado
+            const saved_iso = (m.saved_iso) ||
+                              ((m.saved_at_ar||'').match(/^\d{4}-\d{2}-\d{2}/)?.[0]) ||
+                              null;
 
-            const saved_text = (m.saved_at_ar||'').slice(0,19) || (m.saved_iso||'—');
-            const sha = (m.sha256||'').slice(0,12)+'…';
-            const isToday = !!saved_iso && saved_iso === isoToday;
+            const saved_text = (m.saved_at_ar||'').slice(0,19) || (m.saved_iso||'—');
+            const sha = (m.sha256||'').slice(0,12)+'…';
+            const isToday = !!saved_iso && saved_iso === isoToday;
 
-            trailing = ` <span class="pill ${isToday?'ok':'warn'}">${isToday?'hoy':'no hoy'}</span>
-                         <span class="meta">sha256: <code>${sha}</code> · guardado AR: ${saved_text}</span>`;
-          }
-        }catch{}
-        const copyUrl = location.origin + location.pathname + db;
-        li.innerHTML = `<span class="grow">• <a href="${bust(db)}" download>${FUENTES[key].dbName}</a>${trailing}</span>
-                        <span class="actions"><button class="btn small" data-copy="${copyUrl}">Copiar link</button></span>`;
-      } else {
-        li.innerHTML = `<span class="grow">• ${FUENTES[key].dbName} <span class="pill err">no encontrado</span></span>`;
-      }
-      ul.appendChild(li);
-    }
-  }
+            trailing = ` <span class="pill ${isToday?'ok':'warn'}">${isToday?'hoy':'no hoy'}</span>
+                         <span class="meta">sha256: <code>${sha}</code> · guardado AR: ${saved_text}</span>`;
+          }
+        }catch{}
+        const copyUrl = location.origin + location.pathname + db;
+        li.innerHTML = `<span class="grow">• <a href="${bust(db)}" download>${FUENTES[key].dbName}</a>${trailing}</span>
+                        <span class="actions"><button class="btn small" data-copy="${copyUrl}">Copiar link</button></span>`;
+      } else {
+        li.innerHTML = `<span class="grow">• ${FUENTES[key].dbName} <span class="pill err">no encontrado</span></span>`;
+      }
+      ul.appendChild(li);
+    }
+  }
 
-  // ===== Stock V =====
-  async function renderListas(){
-    const ul = $('#listasList'); ul.innerHTML = '';
-    let idx = {};
-    try{
-      const r = await fetch(bust('public_listas/index.json'), {cache:'no-store'});
-      if (r.ok){
-        const arr = await r.json();
-        for (const it of arr) idx[it.name] = it;
-      }
-    }catch{}
+  // ===== Stock V (MODIFICADO para buscar el más reciente en el index.json) =====
+  async function renderListas(){
+    const ul = $('#listasList'); ul.innerHTML = '';
+    const basePath = 'public_listas';
+    const ulList = document.createDocumentFragment();
+    const dayOnly = new Intl.DateTimeFormat('es-AR',{dateStyle:'short',timeZone:'America/Argentina/Buenos_Aires'});
+    const arDay = new Intl.DateTimeFormat('es-AR',{dateStyle:'short',timeStyle:'medium',timeZone:'America/Argentina/Buenos_Aires'});
 
-    const arDay = new Intl.DateTimeFormat('es-AR',{dateStyle:'short',timeStyle:'medium',timeZone:'America/Argentina/Buenos_Aires'});
-    const dayOnly = new Intl.DateTimeFormat('es-AR',{dateStyle:'short',timeZone:'America/Argentina/Buenos_Aires'});
 
-    for (const key of Object.keys(FUENTES)){
-      const found = await findFirstExisting('public_listas', FUENTES[key].listaNames);
-      const li = document.createElement('li');
-      if (found){
-        const file = found.file;
-        const info = idx[file];
-        let extra = '';
-        if (info && info.mtime){
-          const when = new Date(info.mtime*1000);
-          const isToday = dayOnly.format(new Date()) === dayOnly.format(when);
-          extra = ` <span class="pill ${isToday?'ok':'warn'}">${isToday?'hoy':'no hoy'}</span>
-                    <span class="tag">${(info.size_kb||'–')} KB</span>
-                    <span class="meta">modificado: ${arDay.format(when)}</span>`;
-        } else {
-          extra = ` <span class="pill warn">sin índice</span>`;
-        }
-        const copyUrl = location.origin + location.pathname + 'public_listas/' + file;
-        li.innerHTML = `<span class="grow">• <a href="${found.url}" download>${file}</a>${extra}</span>
-                        <span class="actions"><button class="btn small" data-copy="${copyUrl}">Copiar link</button></span>`;
-      } else {
-        li.innerHTML = `<span class="grow">• ${FUENTES[key].listaNames[0]} <span class="pill err">no encontrado</span></span>`;
-      }
-      ul.appendChild(li);
-    }
-  }
+    try{
+      // 1. Descargar el índice de archivos
+      const r = await fetch(bust(`${basePath}/index.json`), {cache:'no-store'});
+      if (!r.ok) throw new Error('Index no disponible.');
 
-  // ===== Reportes =====
-  async function renderReportes(){
-    const ul = $('#reportsList'); ul.innerHTML = '';
-    const count = $('#countReports');
-    try{
-      const r = await fetch(bust('public_reports/index.json'), {cache:'no-store'});
-      if (!r.ok) throw new Error('index.json no disponible');
-      const arr = await r.json();
-      count.textContent = `${arr.length} ítems`;
-      const q = ($('#searchReports').value||'').toLowerCase().trim();
-      const list = arr.filter(x => !q || (x.name||'').toLowerCase().includes(q));
-      if (!list.length){ ul.innerHTML = '<li class="meta">Sin resultados para el filtro.</li>'; return; }
+      const allFiles = await r.json();
+      const recentFiles = {}; // Para guardar el archivo más reciente por proveedor
 
-      const arFmt = new Intl.DateTimeFormat('es-AR',{dateStyle:'short',timeStyle:'medium',timeZone:'America/Argentina/Buenos_Aires'});
-      const dayOnly = new Intl.DateTimeFormat('es-AR',{dateStyle:'short',timeZone:'America/Argentina/Buenos_Aires'});
-      for (const it of list){
-        const href = bust(it.url || ('public_reports/'+it.name));
-        const when = new Date((it.mtime||0)*1000);
-        const isToday = dayOnly.format(new Date()) === dayOnly.format(when);
-        const arWhen = isNaN(when) ? '—' : arFmt.format(when);
-        const size = (it.size_kb!=null? `${it.size_kb.toLocaleString('es-AR')} KB` : '—');
-        const copyUrl = location.origin + location.pathname + (it.url || ('public_reports/'+it.name));
-        const li = document.createElement('li');
-        li.innerHTML = `<span class="grow">• <a href="${href}" download>${it.name}</a>
-                        <span class="pill ${isToday?'ok':'warn'}">${isToday?'hoy':'no hoy'}</span>
-                        <span class="tag">${size}</span> <span class="meta">generado: ${arWhen}</span></span>
-                        <span class="actions"><button class="btn small" data-copy="${copyUrl}">Copiar link</button></span>`;
-        ul.appendChild(li);
-      }
-    }catch(e){
-      count.textContent = '—';
-      ul.innerHTML = '<li class="meta">No se pudo leer <code>public_reports/index.json</code>.</li>';
-    }
-  }
+      // 2. Buscar el archivo más reciente para cada patrón
+      for (const fileInfo of allFiles){
+        if (!fileInfo.name.endsWith('_ULTIMA.xlsx')) continue;
 
-  async function renderAll(){
-    setLastUpdate();
-    await Promise.all([renderBases(), renderListas(), renderReportes()]);
-  }
-  document.addEventListener('click', (ev)=>{
-    const btn = ev.target.closest('button[data-copy]');
-    if (!btn) return;
-    const url = btn.getAttribute('data-copy');
-    navigator.clipboard.writeText(url).then(()=>{
-      btn.textContent = 'Copiado ✓';
-      setTimeout(()=>btn.textContent='Copiar link',1200);
-    });
-  });
-  document.addEventListener('input', (ev)=>{
-    if (ev.target && ev.target.id === 'searchReports') renderReportes();
-  });
-  $('#refreshBtn').addEventListener('click', ()=>renderAll());
-  const auto = $('#autoToggle'); let timer=null;
-  auto.addEventListener('change', ()=>{
-    if (auto.checked){ timer=setInterval(()=>renderAll(),60000); renderAll(); }
-    else { clearInterval(timer); timer=null; }
-  });
-  renderAll();
+        // Determinar el proveedor
+        let providerKey = null;
+        if (fileInfo.name.startsWith('Tevelam_')) providerKey = 'Tevelam';
+        else if (fileInfo.name.startsWith('Disco_Pro_')) providerKey = 'Disco_Pro';
+        else if (fileInfo.name.startsWith('ARS_Tech_')) providerKey = 'ARS_Tech';
+        // Asume que cualquier archivo con 'Imsa_' es de IMSA (cubre ListaImsa_...)
+        else if (fileInfo.name.includes('Imsa_')) providerKey = 'IMSA';
+
+        if (providerKey){
+          // Mantener solo el archivo con el mtime más alto (el más reciente)
+          if (!recentFiles[providerKey] || fileInfo.mtime > recentFiles[providerKey].mtime){
+            recentFiles[providerKey] = fileInfo;
+          }
+        }
+      }
+
+      // 3. Renderizar el archivo más reciente encontrado
+      for (const key of Object.keys(FUENTES)){ // Usar FUENTES para el orden
+        const fileInfo = recentFiles[key];
+        const li = document.createElement('li');
+
+        if (fileInfo){
+          const file = fileInfo.name;
+          const when = new Date(fileInfo.mtime*1000);
+          const isToday = dayOnly.format(new Date()) === dayOnly.format(when);
+          const url = bust(`${basePath}/${file}`);
+          const displayFilename = file.replace(/_\d{8}_\d{6}_ULTIMA\.xlsx$/, '_ULTIMA.xlsx'); // Mostrar nombre limpio
+
+          let extra = ` <span class="pill ${isToday?'ok':'warn'}">${isToday?'hoy':'no hoy'}</span>
+                        <span class="tag">${(fileInfo.size_kb||'–')} KB</span>
+                        <span class="meta">último: ${arDay.format(when)}</span>`;
+
+          const copyUrl = location.origin + location.pathname + basePath + '/' + file;
+          li.innerHTML = `<span class="grow">• <a href="${url}" download title="${file}">${file}</a>${extra}</span>
+                          <span class="actions"><button class="btn small" data-copy="${copyUrl}">Copiar link</button></span>`;
+        } else {
+          // Si no se encontró ningún archivo para este proveedor
+          li.innerHTML = `<span class="grow">• ${FUENTES[key].dbName.replace('_DB.xlsx','')} <span class="pill err">no encontrado</span></span>`;
+        }
+        ulList.appendChild(li);
+      }
+    }catch(e){
+      console.error("Error al renderizar listas:", e);
+      ul.innerHTML = `<li class="meta">Error al cargar o procesar <code>public_listas/index.json</code>.</li>`;
+      return;
+    }
+
+    ul.innerHTML = ''; // Limpiar el "Cargando..."
+    ul.appendChild(ulList);
+  }
+
+  // ===== Reportes =====
+  async function renderReportes(){
+    const ul = $('#reportsList'); ul.innerHTML = '';
+    const count = $('#countReports');
+    try{
+      const r = await fetch(bust('public_reports/index.json'), {cache:'no-store'});
+      if (!r.ok) throw new Error('index.json no disponible');
+      const arr = await r.json();
+      count.textContent = `${arr.length} ítems`;
+      const q = ($('#searchReports').value||'').toLowerCase().trim();
+      const list = arr.filter(x => !q || (x.name||'').toLowerCase().includes(q));
+      if (!list.length){ ul.innerHTML = '<li class="meta">Sin resultados para el filtro.</li>'; return; }
+
+      const arFmt = new Intl.DateTimeFormat('es-AR',{dateStyle:'short',timeStyle:'medium',timeZone:'America/Argentina/Buenos_Aires'});
+      const dayOnly = new Intl.DateTimeFormat('es-AR',{dateStyle:'short',timeZone:'America/Argentina/Buenos_Aires'});
+      for (const it of list){
+        const href = bust(it.url || ('public_reports/'+it.name));
+        const when = new Date((it.mtime||0)*1000);
+        const isToday = dayOnly.format(new Date()) === dayOnly.format(when);
+        const arWhen = isNaN(when) ? '—' : arFmt.format(when);
+        const size = (it.size_kb!=null? `${it.size_kb.toLocaleString('es-AR')} KB` : '—');
+        const copyUrl = location.origin + location.pathname + (it.url || ('public_reports/'+it.name));
+        const li = document.createElement('li');
+        li.innerHTML = `<span class="grow">• <a href="${href}" download>${it.name}</a>
+                        <span class="pill ${isToday?'ok':'warn'}">${isToday?'hoy':'no hoy'}</span>
+                        <span class="tag">${size}</span> <span class="meta">generado: ${arWhen}</span></span>
+                        <span class="actions"><button class="btn small" data-copy="${copyUrl}">Copiar link</button></span>`;
+        ul.appendChild(li);
+      }
+    }catch(e){
+      count.textContent = '—';
+      ul.innerHTML = '<li class="meta">No se pudo leer <code>public_reports/index.json</code>.</li>';
+    }
+  }
+
+  async function renderAll(){
+    setLastUpdate();
+    await Promise.all([renderBases(), renderListas(), renderReportes()]);
+  }
+  document.addEventListener('click', (ev)=>{
+    const btn = ev.target.closest('button[data-copy]');
+    if (!btn) return;
+    const url = btn.getAttribute('data-copy');
+    navigator.clipboard.writeText(url).then(()=>{
+      btn.textContent = 'Copiado ✓';
+      setTimeout(()=>btn.textContent='Copiar link',1200);
+    });
+  });
+  document.addEventListener('input', (ev)=>{
+    if (ev.target && ev.target.id === 'searchReports') renderReportes();
+  });
+  $('#refreshBtn').addEventListener('click', ()=>renderAll());
+  const auto = $('#autoToggle'); let timer=null;
+  auto.addEventListener('change', ()=>{
+    if (auto.checked){ timer=setInterval(()=>renderAll(),60000); renderAll(); }
+    else { clearInterval(timer); timer=null; }
+  });
+  renderAll();
 })();
 </script>
 </body>
