@@ -1,4 +1,4 @@
-name: HashComparativo (AR, main)
+name: hashcomparativo_ar_main
 
 concurrency:
   group: hashcomparativo-main
@@ -6,7 +6,7 @@ concurrency:
 
 on:
   schedule:
-    - cron: "*/5 * * * *"   # cada 5 min
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -16,20 +16,21 @@ jobs:
   run:
     runs-on: ubuntu-latest
     steps:
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Setup Python
+      - name: Setup-Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Setup Chrome (Selenium/IMSA)
+      - name: Setup-Chrome
         uses: browser-actions/setup-chrome@v1
 
-      - name: Install tools (pip + jq)
+      - name: Install-Tools
         shell: bash
         run: |
           set -e
@@ -38,7 +39,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y jq
 
-      - name: Ensure public dirs & placeholders
+      - name: Ensure-Public-Dirs
         shell: bash
         run: |
           set -e
@@ -49,31 +50,26 @@ jobs:
           [ -f public_listas/index.json ]  || echo "[]" > public_listas/index.json
           [ -f public_reports/index.json ] || echo "[]" > public_reports/index.json
 
-      # Ventana L–V 07:00–18:00 (AR)
-      - name: Guard ventana AR
+      - name: Guard-AR-Window
         id: guard
         shell: bash
         run: |
           set -e
           export TZ=America/Argentina/Buenos_Aires
-          DOW=$(date +%u)   # 1..7
+          DOW=$(date +%u)
           H=$(date +%H)
-          NOW=$(date '+%Y-%m-%d %H:%M:%S %Z')
-          echo "Ahora (AR): $NOW  DOW=$DOW H=$H"
+          echo "Now AR $(date '+%Y-%m-%d %H:%M:%S %Z') DOW=$DOW H=$H"
           if [ "$DOW" -gt 5 ]; then
-            echo "Fin de semana (AR). Salgo."
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if [ "$H" -lt 7 ] || [ "$H" -ge 18 ]; then
-            echo "Fuera de ventana 07:00–18:00 (AR). Salgo."
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          echo "Dentro de ventana. Sigo…"
+          echo "continue"
 
-      # Si TODAS las DB ya son de HOY (AR), saltar
-      - name: Precheck: metas are from today (AR)?
+      - name: Precheck-Today-AR
         id: precheck
         if: ${{ steps.guard.outputs.skip != 'true' }}
         shell: bash
@@ -85,13 +81,13 @@ jobs:
           shopt -s nullglob
           metas=(public_db/*_DB.meta.json)
           if [ ${#metas[@]} -eq 0 ]; then
-            echo "No meta files → do not skip."
+            echo "no metas -> do not skip"
             exit 0
           fi
           all_today=true
           for f in "${metas[@]}"; do
             d=$(jq -r '.saved_at_ar // ""' "$f" | cut -c1-10 || true)
-            echo "Meta $(basename "$f") -> saved_at_ar=$d"
+            echo "meta $(basename "$f") saved_at_ar=$d"
             if [ "$d" != "$AR_TODAY" ]; then all_today=false; fi
           done
           echo "all_today=$all_today"
@@ -99,7 +95,7 @@ jobs:
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Run script (descarga, SHA, DB pública, Stock V, difs)
+      - name: Run-Main-Script
         if: ${{ steps.guard.outputs.skip != 'true' && steps.precheck.outputs.skip != 'true' }}
         env:
           WORKDIR: ${{ github.workspace }}
@@ -111,7 +107,7 @@ jobs:
           set -e
           python hash_comparativo.py
 
-      - name: Build indexes (commit time)
+      - name: Build-Public-Indexes
         if: ${{ steps.guard.outputs.skip != 'true' && steps.precheck.outputs.skip != 'true' }}
         shell: bash
         run: |
@@ -123,7 +119,7 @@ jobs:
             files=( "$dir"/$pattern )
             if [ ${#files[@]} -eq 0 ]; then
               echo "[]" > "$out"
-              echo "$out vacío"
+              echo "$out empty"
               return
             fi
             tmp=$(mktemp)
@@ -133,24 +129,21 @@ jobs:
               name=$(basename "$f")
               bytes=$(stat -c %s "$f")
               size_kb=$(( (bytes + 512) / 1024 ))
-              mtime_commit=$(git log -1 --format=%ct -- "$f" || true)
-              if [ -z "$mtime_commit" ]; then mtime_commit=$(stat -c %Y "$f"); fi
-              jq -n \
-                --arg name "$name" \
-                --arg url "$dir/$name" \
-                --argjson size_kb "$size_kb" \
-                --argjson mtime "$mtime_commit" \
-                '{name:$name,url:$url,size_kb:$size_kb,mtime:$mtime,mtime_commit:$mtime}' \
-                >> "$tmp"
+              ts_commit=$(git log -1 --format=%ct -- "$f" || true)
+              if [ -z "$ts_commit" ]; then ts_commit=$(stat -c %Y "$f"); fi
+              jq -n --arg name "$name" --arg url "$dir/$name" \
+                    --argjson size_kb "$size_kb" --argjson mtime "$ts_commit" \
+                    '{name:$name,url:$url,size_kb:$size_kb,mtime:$mtime,mtime_commit:$mtime}' \
+                    >> "$tmp"
             done
             jq -s 'sort_by(.mtime) | reverse' "$tmp" > "$out"
             rm -f "$tmp"
-            echo "$out generado"
+            echo "$out generated"
           }
           build_idx "public_reports" "*.xlsx"
           build_idx "public_listas" "*_ULTIMA.xlsx"
 
-      - name: List & commit (robusto)
+      - name: List-And-Commit
         if: ${{ steps.guard.outputs.skip != 'true' && steps.precheck.outputs.skip != 'true' }}
         shell: bash
         env:
@@ -160,25 +153,19 @@ jobs:
           echo "public_db:";      ls -lh public_db      || true
           echo "public_listas:";  ls -lh public_listas  || true
           echo "public_reports:"; ls -lh public_reports || true
-          echo "_db (estado):";   ls -lh _db            || true
-
+          echo "_db:";            ls -lh _db            || true
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git fetch origin main
-
           git add -A
           if git diff --cached --quiet; then
-            echo "Sin cambios para commitear."
+            echo "no changes"
             exit 0
           fi
-
-          git commit -m "CI: actualizar DB/Stock V/reportes + índices (commit times)"
-          if git push origin HEAD:main; then
-            echo "Push OK"
-            exit 0
-          fi
-
-          echo "Push rechazado. Intento rebase…"
-          git pull --rebase --autostash origin main || true
-          git push origin HEAD:main || git push --force-with-lease origin HEAD:main
+          git commit -m "CI update DB StockV reports indexes"
+          git push origin HEAD:main || {
+            echo "push rejected, trying rebase"
+            git pull --rebase --autostash origin main || true
+            git push --force-with-lease origin HEAD:main
+          }
