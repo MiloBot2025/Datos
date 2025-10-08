@@ -34,7 +34,7 @@ jobs:
         run: |
           set -e
           python -m pip install --upgrade pip
-          pip install requests openpyxl selenium webdriver-manager
+          pip install requests openpyxl selenium webdriver-manager jq
 
       - name: Ensure public dirs and placeholders
         shell: bash
@@ -69,41 +69,34 @@ jobs:
           fi
           echo "Dentro de ventana. Sigo..."
 
-      - name: Precheck all DBs are TODAY (AR)
+      - name: Precheck all DBs are TODAY AR
         id: precheck
-        if: ${{ steps.guard.outputs.skip != 'true' }}
+        if: steps.guard.outputs.skip != 'true'
         shell: bash
         run: |
           set -e
           export TZ=America/Argentina/Buenos_Aires
           AR_TODAY=$(date +%F)
           echo "AR_TODAY=$AR_TODAY"
-          OUT=$(
-            AR_TODAY="$AR_TODAY" python - <<'PY'
-import os, json
-from pathlib import Path
-ar_today = os.environ["AR_TODAY"]
-paths = sorted(Path("public_db").glob("*_DB.meta.json"))
-if not paths:
-    print("NO_META")
-    raise SystemExit(0)
-def is_today(p: Path) -> bool:
-    try:
-        m = json.loads(p.read_text(encoding="utf-8"))
-        d = (m.get("saved_at_ar") or "")[:10]
-        return d == ar_today
-    except Exception:
-        return False
-print("ALL_TODAY" if all(is_today(p) for p in paths) else "NOT_ALL")
-PY
-          )
-          echo "Precheck: $OUT"
-          if [ "$OUT" = "ALL_TODAY" ]; then
+          shopt -s nullglob
+          metas=(public_db/*_DB.meta.json)
+          if [ ${#metas[@]} -eq 0 ]; then
+            echo "No hay .meta.json → no salto."
+            exit 0
+          fi
+          all_today=true
+          for f in "${metas[@]}"; do
+            d=$(jq -r '.saved_at_ar // ""' "$f" 2>/dev/null | cut -c1-10 || true)
+            echo "Meta $(basename "$f") -> saved_at_ar=$d"
+            if [ "$d" != "$AR_TODAY" ]; then all_today=false; fi
+          done
+          echo "all_today=$all_today"
+          if $all_today; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Run script (descarga, SHA, DB pública, Stock V, difs)
-        if: ${{ steps.guard.outputs.skip != 'true' && steps.precheck.outputs.skip != 'true' }}
+        if: steps.guard.outputs.skip != 'true' && steps.precheck.outputs.skip != 'true'
         env:
           WORKDIR: ${{ github.workspace }}
           IMSA_PASSWORD: ${{ secrets.IMSA_PASSWORD }}
@@ -115,7 +108,7 @@ PY
           python hash_comparativo.py
 
       - name: Build indexes (commit time)
-        if: ${{ steps.guard.outputs.skip != 'true' && steps.precheck.outputs.skip != 'true' }}
+        if: steps.guard.outputs.skip != 'true' && steps.precheck.outputs.skip != 'true'
         shell: bash
         run: |
           python - <<'PY'
@@ -135,6 +128,8 @@ def build(dir_path: str, pattern: str, out_name: str):
     root = Path(dir_path); root.mkdir(parents=True, exist_ok=True)
     items=[]
     for p in sorted(root.glob(pattern)):
+        if not p.is_file():
+            continue
         st = p.stat()
         t  = git_mtime(p) or int(st.st_mtime)
         items.append({
@@ -156,7 +151,7 @@ build("public_listas", "*_ULTIMA.xlsx", "index.json")
 PY
 
       - name: List and commit (robusto)
-        if: ${{ steps.guard.outputs.skip != 'true' && steps.precheck.outputs.skip != 'true' }}
+        if: steps.guard.outputs.skip != 'true' && steps.precheck.outputs.skip != 'true'
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
