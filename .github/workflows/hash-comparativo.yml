@@ -1,4 +1,4 @@
-name: hashcomparativo_ar_main
+name: "HashComparativo (AR, main)"
 
 concurrency:
   group: hashcomparativo-main
@@ -6,7 +6,7 @@ concurrency:
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "*/5 * * * *"   # cada 5 minutos (el guard AR filtra)
   workflow_dispatch:
 
 permissions:
@@ -16,156 +16,196 @@ jobs:
   run:
     runs-on: ubuntu-latest
     steps:
-
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0   # historial completo para git log / commit times
 
-      - name: Setup-Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Setup-Chrome
+      - name: Setup Chrome (Selenium/IMSA)
         uses: browser-actions/setup-chrome@v1
 
-      - name: Install-Tools
-        shell: bash
+      - name: Install deps
         run: |
-          set -e
           python -m pip install --upgrade pip
           pip install requests openpyxl selenium webdriver-manager
-          sudo apt-get update
-          sudo apt-get install -y jq
 
-      - name: Ensure-Public-Dirs
+      - name: Ensure public dirs & placeholders
         shell: bash
         run: |
           set -e
           mkdir -p public_db public_listas public_reports assets _db/hash _db/snapshots downloads
-          : > public_db/.gitkeep
-          : > public_listas/.gitkeep
-          : > public_reports/.gitkeep
+          # placeholders para que los directorios existan en el repo
+          [ -f public_db/.gitkeep ]      || echo "" > public_db/.gitkeep
+          [ -f public_listas/.gitkeep ]  || echo "" > public_listas/.gitkeep
+          [ -f public_reports/.gitkeep ] || echo "" > public_reports/.gitkeep
+          # índices vacíos si no existen (evitan 404 en la web)
           [ -f public_listas/index.json ]  || echo "[]" > public_listas/index.json
           [ -f public_reports/index.json ] || echo "[]" > public_reports/index.json
 
-      - name: Guard-AR-Window
+      # Ventana L–V 07:00–17:59 (AR)
+      - name: Guard ventana AR
         id: guard
         shell: bash
         run: |
           set -e
           export TZ=America/Argentina/Buenos_Aires
-          DOW=$(date +%u)
+          DOW=$(date +%u)   # 1..7
           H=$(date +%H)
-          echo "Now AR $(date '+%Y-%m-%d %H:%M:%S %Z') DOW=$DOW H=$H"
+          NOW=$(date '+%Y-%m-%d %H:%M:%S %Z')
+          echo "Ahora (AR): $NOW  DOW=$DOW H=$H"
           if [ "$DOW" -gt 5 ]; then
+            echo "Fin de semana (AR). Salgo."
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if [ "$H" -lt 7 ] || [ "$H" -ge 18 ]; then
+            echo "Fuera de ventana 07:00–18:00 (AR). Salgo."
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          echo "continue"
+          echo "Dentro de ventana. Sigo…"
 
-      - name: Precheck-Today-AR
+      # Precheck: solo SALTAR si existen TODAS las metas y TODAS son de HOY (AR)
+      - name: Precheck: ¿todas las bases son de HOY (AR)?
         id: precheck
-        if: ${{ steps.guard.outputs.skip != 'true' }}
+        if: steps.guard.outputs.skip != 'true'
         shell: bash
         run: |
           set -e
           export TZ=America/Argentina/Buenos_Aires
           AR_TODAY=$(date +%F)
+          export AR_TODAY
           echo "AR_TODAY=$AR_TODAY"
-          shopt -s nullglob
-          metas=(public_db/*_DB.meta.json)
-          if [ ${#metas[@]} -eq 0 ]; then
-            echo "no metas -> do not skip"
-            exit 0
-          fi
-          all_today=true
-          for f in "${metas[@]}"; do
-            d=$(jq -r '.saved_at_ar // ""' "$f" | cut -c1-10 || true)
-            echo "meta $(basename "$f") saved_at_ar=$d"
-            if [ "$d" != "$AR_TODAY" ]; then all_today=false; fi
-          done
-          echo "all_today=$all_today"
-          if $all_today; then
+
+          OUT=$(python - <<'PY'
+import json, os
+from pathlib import Path
+
+sources = ["Tevelam","Disco_Pro","ARS_Tech","IMSA"]
+today = os.environ["AR_TODAY"]
+
+def meta_ok(src: str) -> bool:
+    p = Path(f"public_db/{src}_DB.meta.json")
+    if not p.exists():
+        print(f"MISSING:{src}")
+        return False
+    try:
+        m = json.loads(p.read_text(encoding="utf-8"))
+        d = (m.get("saved_at_ar") or "")[:10]
+        ok = (d == today)
+        if not ok:
+            print(f"STALE:{src}:{d}")
+        return ok
+    except Exception as e:
+        print(f"BROKEN:{src}:{e}")
+        return False
+
+all_present_and_today = all(meta_ok(s) for s in sources)
+print("ALL_TODAY" if all_present_and_today else "NOT_ALL")
+PY
+)
+
+          echo "Precheck: $OUT"
+          if [ "$OUT" = "ALL_TODAY" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Run-Main-Script
-        if: ${{ steps.guard.outputs.skip != 'true' && steps.precheck.outputs.skip != 'true' }}
+      - name: Run script (descarga, SHA, DB pública, Stock V, difs)
+        if: steps.guard.outputs.skip != 'true' && steps.precheck.outputs.skip != 'true'
         env:
           WORKDIR: ${{ github.workspace }}
           IMSA_PASSWORD: ${{ secrets.IMSA_PASSWORD }}
           BORRAR_DUPLICADO: "true"
-          IMSA_SOLO_CON_STOCK: "true"
-        shell: bash
+          IMSA_SOLO_CON_STOCK: "true"   # IMSA: Stock V solo con leyenda “con stock”
         run: |
           set -e
           python hash_comparativo.py
 
-      - name: Build-Public-Indexes
-        if: ${{ steps.guard.outputs.skip != 'true' && steps.precheck.outputs.skip != 'true' }}
-        shell: bash
+      - name: Build indexes (commit time)
+        if: steps.guard.outputs.skip != 'true' && steps.precheck.outputs.skip != 'true'
         run: |
-          set -e
-          build_idx () {
-            dir="$1"; pattern="$2"; out="$dir/index.json"
-            mkdir -p "$dir"
-            shopt -s nullglob
-            files=( "$dir"/$pattern )
-            if [ ${#files[@]} -eq 0 ]; then
-              echo "[]" > "$out"
-              echo "$out empty"
-              return
-            fi
-            tmp=$(mktemp)
-            : > "$tmp"
-            for f in "${files[@]}"; do
-              [ -f "$f" ] || continue
-              name=$(basename "$f")
-              bytes=$(stat -c %s "$f")
-              size_kb=$(( (bytes + 512) / 1024 ))
-              ts_commit=$(git log -1 --format=%ct -- "$f" || true)
-              if [ -z "$ts_commit" ]; then ts_commit=$(stat -c %Y "$f"); fi
-              jq -n --arg name "$name" --arg url "$dir/$name" \
-                    --argjson size_kb "$size_kb" --argjson mtime "$ts_commit" \
-                    '{name:$name,url:$url,size_kb:$size_kb,mtime:$mtime,mtime_commit:$mtime}' \
-                    >> "$tmp"
-            done
-            jq -s 'sort_by(.mtime) | reverse' "$tmp" > "$out"
-            rm -f "$tmp"
-            echo "$out generated"
-          }
-          build_idx "public_reports" "*.xlsx"
-          build_idx "public_listas" "*_ULTIMA.xlsx"
+          python - <<'PY'
+          import json, subprocess
+          from pathlib import Path
 
-      - name: List-And-Commit
-        if: ${{ steps.guard.outputs.skip != 'true' && steps.precheck.outputs.skip != 'true' }}
+          def git_mtime(p: Path):
+              try:
+                  out = subprocess.check_output(
+                      ["git","log","-1","--format=%ct","--",str(p)],
+                      text=True
+                  ).strip()
+                  return int(out) if out else None
+              except Exception:
+                  return None
+
+          def build(dir_path: str, pattern: str, out_name: str):
+              root = Path(dir_path); root.mkdir(parents=True, exist_ok=True)
+              items=[]
+              for p in sorted(root.glob(pattern)):
+                  st = p.stat()
+                  t  = git_mtime(p) or int(st.st_mtime)
+                  items.append({
+                      "name": p.name,
+                      "url": f"{dir_path}/{p.name}",
+                      "size_kb": round(st.st_size/1024, 1),
+                      "mtime": t,
+                      "mtime_commit": t
+                  })
+              items.sort(key=lambda x:x["mtime"], reverse=True)
+              (root/out_name).write_text(
+                  json.dumps(items, indent=2, ensure_ascii=False),
+                  encoding="utf-8"
+              )
+              print(f"{dir_path}/{out_name} con {len(items)} items")
+
+          build("public_reports", "*.xlsx", "index.json")
+          build("public_listas", "*_ULTIMA.xlsx", "index.json")
+          PY
+
+      - name: List & commit (robusto)
+        if: steps.guard.outputs.skip != 'true' && steps.precheck.outputs.skip != 'true'
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
+
           echo "public_db:";      ls -lh public_db      || true
           echo "public_listas:";  ls -lh public_listas  || true
           echo "public_reports:"; ls -lh public_reports || true
-          echo "_db:";            ls -lh _db            || true
+          echo "_db (estado):";   ls -lh _db            || true
+
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
           git fetch origin main
+
           git add -A
           if git diff --cached --quiet; then
-            echo "no changes"
+            echo "Sin cambios para commitear."
             exit 0
           fi
-          git commit -m "CI update DB StockV reports indexes"
-          git push origin HEAD:main || {
-            echo "push rejected, trying rebase"
-            git pull --rebase --autostash origin main || true
-            git push --force-with-lease origin HEAD:main
-          }
+
+          git commit -m "CI: actualizar DB/Stock V/reportes + índices (commit times)"
+
+          if git push origin HEAD:main; then
+            echo "Push OK"
+            exit 0
+          fi
+
+          echo "Push rechazado (non-fast-forward). Intento rebase + reintento…"
+          git pull --rebase --autostash origin main || true
+
+          if git push origin HEAD:main; then
+            echo "Push OK tras rebase"
+            exit 0
+          fi
+
+          echo "Sigue fallando. Fuerzo con lease (seguro):"
+          git push --force-with-lease origin HEAD:main
