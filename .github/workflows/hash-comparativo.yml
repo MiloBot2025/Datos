@@ -80,19 +80,24 @@ jobs:
           export TZ=America/Argentina/Buenos_Aires
           AR_TODAY=$(date +%F)
           echo "AR_TODAY=$AR_TODAY"
-          OUT=$(python - <<'PY'
-import json,glob
+
+          OUT=$(AR_TODAY="$AR_TODAY" python - <<'PY'
+import os, json
 from pathlib import Path
-paths=sorted(Path("public_db").glob("*_DB.meta.json"))
+
+ar_today = os.environ["AR_TODAY"]
+paths = sorted(Path("public_db").glob("*_DB.meta.json"))
 if not paths:
     print("NO_META"); raise SystemExit(0)
-def is_today(p):
+
+def is_today(p: Path) -> bool:
     try:
-        m=json.loads(p.read_text(encoding="utf-8"))
-        d=(m.get("saved_at_ar") or "")[:10]
-        return d==__import__("datetime").date.today().isoformat()
+        m = json.loads(p.read_text(encoding="utf-8"))
+        d = (m.get("saved_at_ar") or "")[:10]
+        return d == ar_today
     except Exception:
         return False
+
 all_today = all(is_today(p) for p in paths)
 print("ALL_TODAY" if all_today else "NOT_ALL")
 PY
@@ -108,7 +113,7 @@ PY
           WORKDIR: ${{ github.workspace }}
           IMSA_PASSWORD: ${{ secrets.IMSA_PASSWORD }}
           BORRAR_DUPLICADO: "true"
-          IMSA_SOLO_CON_STOCK: "true"   # <- IMSA: sólo artículos con leyenda “con stock” en Stock V
+          IMSA_SOLO_CON_STOCK: "true"   # IMSA: sólo artículos con leyenda “con stock” en Stock V
         run: |
           set -e
           python hash_comparativo.py
@@ -154,8 +159,10 @@ PY
           build("public_listas", "*_ULTIMA.xlsx", "index.json")
           PY
 
+      # Importante: comitear aunque el precheck haya saltado el proceso,
+      # para publicar placeholders/índices creados antes.
       - name: List & commit (robusto)
-        if: steps.guard.outputs.skip != 'true' && steps.precheck.outputs.skip != 'true'
+        if: steps.guard.outputs.skip != 'true'
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
