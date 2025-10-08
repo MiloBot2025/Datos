@@ -36,85 +36,60 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests openpyxl selenium webdriver-manager
 
-      - name: Ensure public dirs & placeholders
+      - name: Ensure dirs
         shell: bash
         run: |
           set -e
           mkdir -p public_db public_listas public_reports assets _db/hash _db/snapshots downloads
-          [ -f public_db/.gitkeep ]      || echo "" > public_db/.gitkeep
-          [ -f public_listas/.gitkeep ]  || echo "" > public_listas/.gitkeep
-          [ -f public_reports/.gitkeep ] || echo "" > public_reports/.gitkeep
+          [ -f public_db/.gitkeep ]      || : > public_db/.gitkeep
+          [ -f public_listas/.gitkeep ]  || : > public_listas/.gitkeep
+          [ -f public_reports/.gitkeep ] || : > public_reports/.gitkeep
           [ -f public_listas/index.json ]  || echo "[]" > public_listas/index.json
           [ -f public_reports/index.json ] || echo "[]" > public_reports/index.json
 
-      # Window Mon-Fri 07:00-17:59 (AR)
       - name: Guard window AR
         id: guard
         shell: bash
         run: |
           set -e
           export TZ=America/Argentina/Buenos_Aires
-          DOW=$(date +%u)
-          H=$(date +%H)
-          NOW=$(date '+%Y-%m-%d %H:%M:%S %Z')
-          echo "Now (AR): $NOW  DOW=$DOW H=$H"
-          if [ "$DOW" -gt 5 ]; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if [ "$H" -lt 7 ] || [ "$H" -ge 18 ]; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "Inside window. Continue."
+          DOW=$(date +%u); H=$(date +%H)
+          if [ "$DOW" -gt 5 ]; then echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          if [ "$H" -lt 7 ] || [ "$H" -ge 18 ]; then echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          echo "OK"
 
-      # Precheck: skip only if ALL metas exist and ALL are today (AR)
-      - name: Precheck all metas are TODAY (AR)
+      - name: Precheck metas today
         id: precheck
         if: steps.guard.outputs.skip != 'true'
         shell: bash
         run: |
           set -e
-          export TZ=America/Argentina/Buenos_Aires
-          AR_TODAY=$(date +%F)
-          export AR_TODAY
+          AR_TODAY=$(TZ=America/Argentina/Buenos_Aires date +%F)
           echo "AR_TODAY=$AR_TODAY"
-
-          python - <<'PY'
-import json, os
-from pathlib import Path
-
-sources = ["Tevelam","Disco_Pro","ARS_Tech","IMSA"]
-today = os.environ["AR_TODAY"]
-
-def meta_ok(src: str) -> bool:
-    p = Path(f"public_db/{src}_DB.meta.json")
-    if not p.exists():
-        print(f"MISSING:{src}")
-        return False
-    try:
-        m = json.loads(p.read_text(encoding="utf-8"))
-        d = (m.get("saved_at_ar") or "")[:10]
-        ok = (d == today)
-        if not ok:
-            print(f"STALE:{src}:{d}")
-        return ok
-    except Exception as e:
-        print(f"BROKEN:{src}:{e}")
-        return False
-
-all_ok = all(meta_ok(s) for s in sources)
-print("ALL_TODAY" if all_ok else "NOT_ALL")
-if all_ok:
-    # communicate to next steps via file for bash to read
-    Path(".precheck_skip").write_text("true", encoding="utf-8")
-PY
-
-          if [ -f .precheck_skip ]; then
+          files=(public_db/Tevelam_DB.meta.json public_db/Disco_Pro_DB.meta.json public_db/ARS_Tech_DB.meta.json public_db/IMSA_DB.meta.json)
+          all_exist=true
+          for f in "${files[@]}"; do
+            [ -f "$f" ] || all_exist=false
+          done
+          if [ "$all_exist" != true ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          all_today=true
+          for f in "${files[@]}"; do
+            d=$(grep -o '"saved_at_ar"[[:space:]]*:[[:space:]]*"[0-9-]\{10\}' "$f" | head -n1 | sed 's/.*"\([0-9-]\{10\}\)$/\1/')
+            if [ "$d" != "$AR_TODAY" ]; then
+              echo "STALE: $f saved_at_ar=$d"
+              all_today=false
+            fi
+          done
+          if [ "$all_today" = true ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Run script (download, SHA, DB, Stock V, diffs)
+      - name: Run script
         if: steps.guard.outputs.skip != 'true' && steps.precheck.outputs.skip != 'true'
         shell: bash
         env:
@@ -126,7 +101,7 @@ PY
           set -e
           python hash_comparativo.py
 
-      - name: Build indexes (commit time)
+      - name: Build indexes
         if: steps.guard.outputs.skip != 'true' && steps.precheck.outputs.skip != 'true'
         shell: bash
         run: |
@@ -134,79 +109,43 @@ PY
           python - <<'PY'
 import json, subprocess
 from pathlib import Path
-
 def git_mtime(p: Path):
     try:
-        out = subprocess.check_output(
-            ["git","log","-1","--format=%ct","--",str(p)],
-            text=True
-        ).strip()
+        out = subprocess.check_output(["git","log","-1","--format=%ct","--",str(p)], text=True).strip()
         return int(out) if out else None
     except Exception:
         return None
-
-def build(dir_path: str, pattern: str, out_name: str):
+def build(dir_path, pattern, out_name):
     root = Path(dir_path); root.mkdir(parents=True, exist_ok=True)
     items=[]
     for p in sorted(root.glob(pattern)):
-        st = p.stat()
-        t  = git_mtime(p) or int(st.st_mtime)
-        items.append({
-            "name": p.name,
-            "url": f"{dir_path}/{p.name}",
-            "size_kb": round(st.st_size/1024, 1),
-            "mtime": t,
-            "mtime_commit": t
-        })
+        st=p.stat(); t=git_mtime(p) or int(st.st_mtime)
+        items.append({"name":p.name,"url":f"{dir_path}/{p.name}","size_kb":round(st.st_size/1024,1),"mtime":t,"mtime_commit":t})
     items.sort(key=lambda x:x["mtime"], reverse=True)
-    (root/out_name).write_text(
-        json.dumps(items, indent=2, ensure_ascii=False),
-        encoding="utf-8"
-    )
-    print(f"{dir_path}/{out_name} with {len(items)} items")
-
-build("public_reports", "*.xlsx", "index.json")
-build("public_listas", "*_ULTIMA.xlsx", "index.json")
+    (root/out_name).write_text(json.dumps(items, indent=2, ensure_ascii=False), encoding="utf-8")
+build("public_reports","*.xlsx","index.json")
+build("public_listas","*_ULTIMA.xlsx","index.json")
 PY
 
-      - name: List & commit (robust)
+      - name: Commit & push (robust)
         if: steps.guard.outputs.skip != 'true' && steps.precheck.outputs.skip != 'true'
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
-          echo "public_db:";      ls -lh public_db      || true
-          echo "public_listas:";  ls -lh public_listas  || true
-          echo "public_reports:"; ls -lh public_reports || true
-          echo "_db (state):";    ls -lh _db            || true
-
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-
           git fetch origin main
           git add -A
-
           if git diff --cached --quiet; then
             echo "No changes."
             exit 0
           fi
-
-          git commit -m "CI: update DB/Stock V/reports + indices (commit times)"
-
-          if git push origin HEAD:main; then
-            echo "Push OK"
-            exit 0
-          fi
-
-          echo "Push rejected (non-ff). Trying rebase..."
-          git pull --rebase --autostash origin main || true
-
-          if git push origin HEAD:main; then
-            echo "Push OK after rebase"
-            exit 0
-          fi
-
-          echo "Force with lease as last resort"
-          git push --force-with-lease origin HEAD:main
+          git commit -m "CI: update DB/Stock V/reports + indices"
+          git push origin HEAD:main || {
+            echo "Retry with rebase..."
+            git pull --rebase --autostash origin main || true
+            git push origin HEAD:main || git push --force-with-lease origin HEAD:main
+          }
