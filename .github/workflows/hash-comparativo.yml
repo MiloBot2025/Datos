@@ -73,7 +73,7 @@ jobs:
           echo "Dentro de ventana. Sigo…"
 
       # Si TODAS las DB ya son de HOY (AR), saltar
-      - name: Precheck: metas are from today (AR)?
+      - name: "Precheck: metas are from today (AR)?"
         id: precheck
         if: ${{ steps.guard.outputs.skip != 'true' }}
         shell: bash
