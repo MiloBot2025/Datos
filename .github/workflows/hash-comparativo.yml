@@ -6,7 +6,7 @@ concurrency:
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "*/5 * * * *"   # cada 5 min
   workflow_dispatch:
 
 permissions:
@@ -29,17 +29,12 @@ jobs:
       - name: Setup Chrome (Selenium/IMSA)
         uses: browser-actions/setup-chrome@v1
 
-      - name: Install Python deps
+      - name: Install tools (pip + jq)
         shell: bash
         run: |
           set -e
           python -m pip install --upgrade pip
           pip install requests openpyxl selenium webdriver-manager
-
-      - name: Install jq
-        shell: bash
-        run: |
-          set -e
           sudo apt-get update
           sudo apt-get install -y jq
 
@@ -54,7 +49,7 @@ jobs:
           [ -f public_listas/index.json ]  || echo "[]" > public_listas/index.json
           [ -f public_reports/index.json ] || echo "[]" > public_reports/index.json
 
-      # Window Mon–Fri 07:00–18:00 (Argentina)
+      # Ventana L–V 07:00–18:00 (AR)
       - name: Guard ventana AR
         id: guard
         shell: bash
@@ -77,7 +72,7 @@ jobs:
           fi
           echo "Dentro de ventana. Sigo…"
 
-      # If ALL DB metas are from today (AR), skip the rest
+      # Si TODAS las DB ya son de HOY (AR), saltar
       - name: Precheck: metas are from today (AR)?
         id: precheck
         if: ${{ steps.guard.outputs.skip != 'true' }}
