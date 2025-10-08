@@ -1,5 +1,4 @@
 # hash_comparativo.py — copia exacta (DB), Stock V y reportes con estado persistente
-
 from __future__ import annotations
 
 import csv
@@ -66,9 +65,6 @@ IMSA_PASSWORD = os.getenv("IMSA_PASSWORD", "lista2021")
 
 REQ_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 TIMEOUT = 60
-
-IMSA_SOLO_CON_STOCK = os.getenv("IMSA_SOLO_CON_STOCK", "false").lower() == "true"
-IMSA_BORRAR_ORIGINAL = os.getenv("IMSA_BORRAR_ORIGINAL", "false").lower() == "true"
 
 # ========= LOG / UTILS =========
 def log(msg: str) -> None:
@@ -307,45 +303,76 @@ def extraer_extra_hoja1(path: Path) -> List[Dict[str, Any]]:
     finally:
         wb.close()
 
-# IMSA Hoja1 (busca hoja con encabezados y limpia código)
+# IMSA Hoja1 (SOLO 'con stock') — incluye estrictamente líneas cuyo estado sea "con stock"
 def extraer_imsa_hoja1(path: Path) -> List[Dict[str, Any]]:
+    """
+    IMSA → Stock V: incluir SOLO las filas cuyo estado sea 'con stock' (match exacto, case/tildes-insensitive).
+    La DB copia exacta NO se filtra; esto aplica únicamente a la salida tipo 'Hoja 1'.
+    """
+    def _is_con_stock(v: Any) -> bool:
+        t = " ".join((_norm_text_lc(v) or "").split())  # normaliza espacios
+        return t == "con stock"
+
     out: List[Dict[str, Any]] = []
     wb = load_workbook(path, read_only=True, data_only=True)
     try:
         target_ws = None
         header_row = None
         cols = {"codigo": None, "stock": None, "precio": None, "moneda": None}
+        # Intento por encabezados
         for ws in wb.worksheets:
             hr, c = detectar_columnas(ws)
             if hr:
                 target_ws, header_row, cols = ws, hr, c
                 break
+
+        # Fallback sin encabezados (asume: ID=col 1, stock=col 8)
         if not target_ws:
             target_ws = wb.active
             for row in target_ws.iter_rows(min_row=8, min_col=1, max_col=max(target_ws.max_column, 1), values_only=True):
                 cod = row[0] if len(row) >= 1 else None
-                stx = row[7] if len(row) >= 8 else None
+                stx = row[7] if len(row) >= 8 else None  # col H
                 if not _norm_text(cod): continue
-                out.append({"ID": _norm_text(cod), "Stock": convertir_stock_generico(stx),
-                            "Precio": None, "Moneda": None})
+                if not _is_con_stock(stx): continue
+                s_cod = _norm_text(cod)
+                cod_final = s_cod.split("-", 2)[-1] if s_cod.count("-") >= 2 else s_cod
+                out.append({"ID": cod_final, "Stock": 6, "Precio": None, "Moneda": None})
             return out
 
         max_needed_col = max(v for v in cols.values() if v)
-        for row in target_ws.iter_rows(min_row=header_row+1, min_col=1, max_col=max_needed_col, values_only=True):
-            cod = row[cols["codigo"]-1] if cols["codigo"] else None
-            if not _norm_text(cod): continue
-            stx = row[cols["stock"]-1] if cols["stock"] else None
-            precio = row[cols["precio"]-1] if cols["precio"] else None
-            moneda = row[cols["moneda"]-1] if cols["moneda"] else None
-            s_cod = _norm_text(cod)
-            cod_final = s_cod.split("-", 2)[-1] if s_cod.count("-") >= 2 else s_cod
-            out.append({"ID": cod_final, "Stock": convertir_stock_generico(stx),
-                        "Precio": try_float(precio), "Moneda": _norm_text(moneda) or None})
+        use_header_path = bool(cols.get("stock"))
+
+        if use_header_path:
+            for row in target_ws.iter_rows(min_row=header_row+1, min_col=1, max_col=max_needed_col, values_only=True):
+                cod = row[cols["codigo"]-1] if cols["codigo"] else None
+                if not _norm_text(cod): continue
+                stx = row[cols["stock"]-1] if cols["stock"] else None
+                if not _is_con_stock(stx): continue
+                precio = row[cols["precio"]-1] if cols["precio"] else None
+                moneda = row[cols["moneda"]-1] if cols["moneda"] else None
+                s_cod = _norm_text(cod)
+                cod_final = s_cod.split("-", 2)[-1] if s_cod.count("-") >= 2 else s_cod
+                out.append({
+                    "ID": cod_final,
+                    "Stock": 6,
+                    "Precio": try_float(precio),
+                    "Moneda": _norm_text(moneda) or None
+                })
+        else:
+            # Encabezados detectados pero sin columna “stock”: fallback por posición (stock = col 8)
+            for row in target_ws.iter_rows(min_row=8, min_col=1, max_col=max(target_ws.max_column, 1), values_only=True):
+                cod = row[0] if len(row) >= 1 else None
+                stx = row[7] if len(row) >= 8 else None
+                if not _norm_text(cod): continue
+                if not _is_con_stock(stx): continue
+                s_cod = _norm_text(cod)
+                cod_final = s_cod.split("-", 2)[-1] if s_cod.count("-") >= 2 else s_cod
+                out.append({"ID": cod_final, "Stock": 6, "Precio": None, "Moneda": None})
     finally:
         wb.close()
     return out
 
-# Extractores SOLO difs
+# Extractores SOLO difs (DB completas)
 def extraer_tevelam(path: Path) -> List[Dict[str, Any]]:
     return extraer_registros_generico_xlsx(path, fila_inicio_fallback=11)
 
@@ -694,7 +721,7 @@ def run_fuente(source_key: str, path: Optional[Path],
     # A) Stock V (Hoja 1)
     try:
         regs_h1 = extractor_hoja1(path)
-        guardar_hoja1(path, regs_h1)
+        guardar_hoja1_xlsx(path, regs_h1)  # <-- bugfix: llamar a la función correcta
     except Exception as e:
         log(f"⚠️ {source_key}: error generando Hoja 1: {e}")
 
