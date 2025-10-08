@@ -15,7 +15,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0        # ⬅️ IMPORTANTE: historial completo para que git log vea el último commit real
+          fetch-depth: 0        # historial completo para que 'git log' obtenga el último commit real
 
       - name: Setup Python
         uses: actions/setup-python@v5
