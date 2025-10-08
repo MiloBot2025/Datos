@@ -6,7 +6,7 @@ concurrency:
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "*/5 * * * *"   # cada 5 minutos
   workflow_dispatch:
 
 permissions:
@@ -34,25 +34,25 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests openpyxl selenium webdriver-manager
 
-      - name: Ensure public dirs & placeholders
+      - name: Ensure public dirs and placeholders
         shell: bash
         run: |
           set -e
           mkdir -p public_db public_listas public_reports assets _db/hash _db/snapshots downloads
-          [ -f public_db/.gitkeep ]      || echo "" > public_db/.gitkeep
-          [ -f public_listas/.gitkeep ]  || echo "" > public_listas/.gitkeep
-          [ -f public_reports/.gitkeep ] || echo "" > public_reports/.gitkeep
+          [ -f public_db/.gitkeep ]      || printf "" > public_db/.gitkeep
+          [ -f public_listas/.gitkeep ]  || printf "" > public_listas/.gitkeep
+          [ -f public_reports/.gitkeep ] || printf "" > public_reports/.gitkeep
           [ -f public_listas/index.json ]  || echo "[]" > public_listas/index.json
           [ -f public_reports/index.json ] || echo "[]" > public_reports/index.json
 
-      # Ventana L–V 07:00–17:59 (AR)
+      # Ventana L–V 07:00–18:00 (AR)
       - name: Guard ventana AR
         id: guard
         shell: bash
         run: |
           set -e
           export TZ=America/Argentina/Buenos_Aires
-          DOW=$(date +%u)
+          DOW=$(date +%u)   # 1..7
           H=$(date +%H)
           NOW=$(date '+%Y-%m-%d %H:%M:%S %Z')
           echo "Ahora (AR): $NOW  DOW=$DOW H=$H"
@@ -68,8 +68,8 @@ jobs:
           fi
           echo "Dentro de ventana. Sigo…"
 
-      # Precheck: si TODAS las DB ya son de HOY (AR), saltar el resto
-      - name: "Precheck: ¿todas las bases son de HOY (AR)?"
+      # Precheck: si TODAS las DB ya son de HOY (AR), saltar
+      - name: Precheck all DBs are TODAY (AR)
         id: precheck
         if: ${{ steps.guard.outputs.skip != 'true' }}
         shell: bash
@@ -78,26 +78,21 @@ jobs:
           export TZ=America/Argentina/Buenos_Aires
           AR_TODAY=$(date +%F)
           echo "AR_TODAY=$AR_TODAY"
-
           OUT=$(AR_TODAY="$AR_TODAY" python - <<'PY'
 import os, json
 from pathlib import Path
-
 ar_today = os.environ["AR_TODAY"]
 paths = sorted(Path("public_db").glob("*_DB.meta.json"))
 if not paths:
     print("NO_META"); raise SystemExit(0)
-
-def is_today(p: Path) -> bool:
+def is_today(p):
     try:
-        m = json.loads(p.read_text(encoding="utf-8"))
-        d = (m.get("saved_at_ar") or "")[:10]
-        return d == ar_today
+        m=json.loads(p.read_text(encoding="utf-8"))
+        d=(m.get("saved_at_ar") or "")[:10]
+        return d==ar_today
     except Exception:
         return False
-
-all_today = all(is_today(p) for p in paths)
-print("ALL_TODAY" if all_today else "NOT_ALL")
+print("ALL_TODAY" if all(is_today(p) for p in paths) else "NOT_ALL")
 PY
 )
           echo "Precheck: $OUT"
@@ -105,13 +100,13 @@ PY
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Run script (descarga, SHA, DB pública, Stock V, difs)
+      - name: Run script (descarga + SHA + DB pública + Stock V + difs)
         if: ${{ steps.guard.outputs.skip != 'true' && steps.precheck.outputs.skip != 'true' }}
         env:
           WORKDIR: ${{ github.workspace }}
           IMSA_PASSWORD: ${{ secrets.IMSA_PASSWORD }}
           BORRAR_DUPLICADO: "true"
-          IMSA_SOLO_CON_STOCK: "true"
+          IMSA_SOLO_CON_STOCK: "true"   # IMSA: sólo artículos con leyenda "con stock" en Stock V
         run: |
           set -e
           python hash_comparativo.py
@@ -157,15 +152,13 @@ PY
           build("public_listas", "*_ULTIMA.xlsx", "index.json")
           PY
 
-      # Igual comiteamos si hubo placeholders/índices creados
-      - name: List & commit (robusto)
+      - name: List and commit (robusto)
         if: ${{ steps.guard.outputs.skip != 'true' }}
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
-
           echo "public_db:";      ls -lh public_db      || true
           echo "public_listas:";  ls -lh public_listas  || true
           echo "public_reports:"; ls -lh public_reports || true
