@@ -6,7 +6,7 @@ concurrency:
 
 on:
   schedule:
-    - cron: "*/5 * * * *"   # cada 5 minutos
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -30,7 +30,9 @@ jobs:
         uses: browser-actions/setup-chrome@v1
 
       - name: Install deps
+        shell: bash
         run: |
+          set -e
           python -m pip install --upgrade pip
           pip install requests openpyxl selenium webdriver-manager
 
@@ -45,14 +47,13 @@ jobs:
           [ -f public_listas/index.json ]  || echo "[]" > public_listas/index.json
           [ -f public_reports/index.json ] || echo "[]" > public_reports/index.json
 
-      # Ventana L–V 07:00–18:00 (AR)
       - name: Guard ventana AR
         id: guard
         shell: bash
         run: |
           set -e
           export TZ=America/Argentina/Buenos_Aires
-          DOW=$(date +%u)   # 1..7
+          DOW=$(date +%u)
           H=$(date +%H)
           NOW=$(date '+%Y-%m-%d %H:%M:%S %Z')
           echo "Ahora (AR): $NOW  DOW=$DOW H=$H"
@@ -62,13 +63,12 @@ jobs:
             exit 0
           fi
           if [ "$H" -lt 7 ] || [ "$H" -ge 18 ]; then
-            echo "Fuera de ventana 07:00–18:00 (AR). Salgo."
+            echo "Fuera de ventana 07:00-18:00 (AR). Salgo."
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          echo "Dentro de ventana. Sigo…"
+          echo "Dentro de ventana. Sigo..."
 
-      # Precheck: si TODAS las DB ya son de HOY (AR), saltar
       - name: Precheck all DBs are TODAY (AR)
         id: precheck
         if: ${{ steps.guard.outputs.skip != 'true' }}
@@ -78,82 +78,85 @@ jobs:
           export TZ=America/Argentina/Buenos_Aires
           AR_TODAY=$(date +%F)
           echo "AR_TODAY=$AR_TODAY"
-          OUT=$(AR_TODAY="$AR_TODAY" python - <<'PY'
+          OUT=$(
+            AR_TODAY="$AR_TODAY" python - <<'PY'
 import os, json
 from pathlib import Path
 ar_today = os.environ["AR_TODAY"]
 paths = sorted(Path("public_db").glob("*_DB.meta.json"))
 if not paths:
-    print("NO_META"); raise SystemExit(0)
-def is_today(p):
+    print("NO_META")
+    raise SystemExit(0)
+def is_today(p: Path) -> bool:
     try:
-        m=json.loads(p.read_text(encoding="utf-8"))
-        d=(m.get("saved_at_ar") or "")[:10]
-        return d==ar_today
+        m = json.loads(p.read_text(encoding="utf-8"))
+        d = (m.get("saved_at_ar") or "")[:10]
+        return d == ar_today
     except Exception:
         return False
 print("ALL_TODAY" if all(is_today(p) for p in paths) else "NOT_ALL")
 PY
-)
+          )
           echo "Precheck: $OUT"
           if [ "$OUT" = "ALL_TODAY" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Run script (descarga + SHA + DB pública + Stock V + difs)
+      - name: Run script (descarga, SHA, DB pública, Stock V, difs)
         if: ${{ steps.guard.outputs.skip != 'true' && steps.precheck.outputs.skip != 'true' }}
         env:
           WORKDIR: ${{ github.workspace }}
           IMSA_PASSWORD: ${{ secrets.IMSA_PASSWORD }}
           BORRAR_DUPLICADO: "true"
-          IMSA_SOLO_CON_STOCK: "true"   # IMSA: sólo artículos con leyenda "con stock" en Stock V
+          IMSA_SOLO_CON_STOCK: "true"
+        shell: bash
         run: |
           set -e
           python hash_comparativo.py
 
       - name: Build indexes (commit time)
         if: ${{ steps.guard.outputs.skip != 'true' && steps.precheck.outputs.skip != 'true' }}
+        shell: bash
         run: |
           python - <<'PY'
-          import json, subprocess
-          from pathlib import Path
+import json, subprocess
+from pathlib import Path
 
-          def git_mtime(p: Path) -> int | None:
-              try:
-                  out = subprocess.check_output(
-                      ["git","log","-1","--format=%ct","--",str(p)],
-                      text=True
-                  ).strip()
-                  return int(out) if out else None
-              except Exception:
-                  return None
+def git_mtime(p: Path):
+    try:
+        out = subprocess.check_output(
+            ["git","log","-1","--format=%ct","--",str(p)], text=True
+        ).strip()
+        return int(out) if out else None
+    except Exception:
+        return None
 
-          def build(dir_path: str, pattern: str, out_name: str):
-              root = Path(dir_path); root.mkdir(parents=True, exist_ok=True)
-              items=[]
-              for p in sorted(root.glob(pattern)):
-                  st = p.stat()
-                  t  = git_mtime(p) or int(st.st_mtime)
-                  items.append({
-                      "name": p.name,
-                      "url": f"{dir_path}/{p.name}",
-                      "size_kb": round(st.st_size/1024, 1),
-                      "mtime": t,
-                      "mtime_commit": t
-                  })
-              items.sort(key=lambda x:x["mtime"], reverse=True)
-              (root/out_name).write_text(
-                  json.dumps(items, indent=2, ensure_ascii=False),
-                  encoding="utf-8"
-              )
-              print(f"{dir_path}/{out_name} con {len(items)} items")
+def build(dir_path: str, pattern: str, out_name: str):
+    root = Path(dir_path); root.mkdir(parents=True, exist_ok=True)
+    items=[]
+    for p in sorted(root.glob(pattern)):
+        st = p.stat()
+        t  = git_mtime(p) or int(st.st_mtime)
+        items.append({
+            "name": p.name,
+            "url": f"{dir_path}/{p.name}",
+            "size_kb": round(st.st_size/1024, 1),
+            "mtime": t,
+            "mtime_commit": t
+        })
+    items.sort(key=lambda x:x["mtime"], reverse=True)
+    (root/out_name).write_text(
+        json.dumps(items, indent=2, ensure_ascii=False),
+        encoding="utf-8"
+    )
+    print(f"{dir_path}/{out_name} con {len(items)} items")
 
-          build("public_reports", "*.xlsx", "index.json")
-          build("public_listas", "*_ULTIMA.xlsx", "index.json")
-          PY
+build("public_reports", "*.xlsx", "index.json")
+build("public_listas", "*_ULTIMA.xlsx", "index.json")
+PY
 
       - name: List and commit (robusto)
-        if: ${{ steps.guard.outputs.skip != 'true' }}
+        if: ${{ steps.guard.outputs.skip != 'true' && steps.precheck.outputs.skip != 'true' }}
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -167,7 +170,6 @@ PY
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-
           git fetch origin main
 
           git add -A
@@ -177,19 +179,11 @@ PY
           fi
 
           git commit -m "CI: actualizar DB/Stock V/reportes + índices (commit times)"
-
           if git push origin HEAD:main; then
             echo "Push OK"
             exit 0
           fi
 
-          echo "Push rechazado (non-fast-forward). Intento rebase + reintento…"
+          echo "Push rechazado. Intento rebase..."
           git pull --rebase --autostash origin main || true
-
-          if git push origin HEAD:main; then
-            echo "Push OK tras rebase"
-            exit 0
-          fi
-
-          echo "Sigue fallando. Fuerzo con lease (seguro):"
-          git push --force-with-lease origin HEAD:main
+          git push origin HEAD:main || git push --force-with-lease origin HEAD:main
