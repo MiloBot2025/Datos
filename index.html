@@ -196,7 +196,7 @@
     }
   }
 
-  // ===== Stock V (MODIFICADO para buscar el más reciente en el index.json) =====
+  // ===== Stock V (MODIFICADO para buscar el más reciente en el index.json de forma robusta) =====
   async function renderListas(){
     const ul = $('#listasList'); ul.innerHTML = '';
     const basePath = 'public_listas';
@@ -204,26 +204,27 @@
     const dayOnly = new Intl.DateTimeFormat('es-AR',{dateStyle:'short',timeZone:'America/Argentina/Buenos_Aires'});
     const arDay = new Intl.DateTimeFormat('es-AR',{dateStyle:'short',timeStyle:'medium',timeZone:'America/Argentina/Buenos_Aires'});
 
-
     try{
       // 1. Descargar el índice de archivos
       const r = await fetch(bust(`${basePath}/index.json`), {cache:'no-store'});
-      if (!r.ok) throw new Error('Index no disponible.');
+      if (!r.ok) throw new Error('Index no disponible. Estado: ' + r.status);
 
       const allFiles = await r.json();
       const recentFiles = {}; // Para guardar el archivo más reciente por proveedor
 
       // 2. Buscar el archivo más reciente para cada patrón
       for (const fileInfo of allFiles){
-        if (!fileInfo.name.endsWith('_ULTIMA.xlsx')) continue;
+        // Ignorar si no es una lista o si no tiene mtime (para evitar carpetas o index.json)
+        if (!fileInfo.name.endsWith('.xlsx') || !fileInfo.mtime) continue;
 
+        const fileNameLower = fileInfo.name.toLowerCase();
+        
         // Determinar el proveedor
         let providerKey = null;
-        if (fileInfo.name.startsWith('Tevelam_')) providerKey = 'Tevelam';
-        else if (fileInfo.name.startsWith('Disco_Pro_')) providerKey = 'Disco_Pro';
-        else if (fileInfo.name.startsWith('ARS_Tech_')) providerKey = 'ARS_Tech';
-        // Asume que cualquier archivo con 'Imsa_' es de IMSA (cubre ListaImsa_...)
-        else if (fileInfo.name.includes('Imsa_')) providerKey = 'IMSA';
+        if (fileNameLower.startsWith('tevelam_')) providerKey = 'Tevelam';
+        else if (fileNameLower.startsWith('disco_pro_')) providerKey = 'Disco_Pro';
+        else if (fileNameLower.startsWith('ars_tech_')) providerKey = 'ARS_Tech';
+        else if (fileNameLower.includes('imsa_')) providerKey = 'IMSA'; // ListaImsa_... o IMSA_...
 
         if (providerKey){
           // Mantener solo el archivo con el mtime más alto (el más reciente)
@@ -241,26 +242,35 @@
         if (fileInfo){
           const file = fileInfo.name;
           const when = new Date(fileInfo.mtime*1000);
+          // Resiliencia: si la fecha es inválida, se salta la li.
+          if (isNaN(when)) continue; 
+
           const isToday = dayOnly.format(new Date()) === dayOnly.format(when);
           const url = bust(`${basePath}/${file}`);
-          const displayFilename = file.replace(/_\d{8}_\d{6}_ULTIMA\.xlsx$/, '_ULTIMA.xlsx'); // Mostrar nombre limpio
 
+          // Mostrar nombre limpio (sin la fecha y hora si es un archivo de fecha/hora)
+          // Tevelam_20251008_155854_ULTIMA.xlsx -> Tevelam_ULTIMA.xlsx
+          const displayFilename = file.replace(/_\d{8}_\d{6}_ULTIMA\.xlsx$/, '_ULTIMA.xlsx'); 
+
+          // El tag de tamaño usa 0 si size_kb es nulo
+          const size = (fileInfo.size_kb != null ? fileInfo.size_kb.toLocaleString('es-AR') : '0');
           let extra = ` <span class="pill ${isToday?'ok':'warn'}">${isToday?'hoy':'no hoy'}</span>
-                        <span class="tag">${(fileInfo.size_kb||'–')} KB</span>
+                        <span class="tag">${size} KB</span>
                         <span class="meta">último: ${arDay.format(when)}</span>`;
 
           const copyUrl = location.origin + location.pathname + basePath + '/' + file;
-          li.innerHTML = `<span class="grow">• <a href="${url}" download title="${file}">${file}</a>${extra}</span>
+          li.innerHTML = `<span class="grow">• <a href="${url}" download title="${file}">${displayFilename}</a>${extra}</span>
                           <span class="actions"><button class="btn small" data-copy="${copyUrl}">Copiar link</button></span>`;
         } else {
           // Si no se encontró ningún archivo para este proveedor
-          li.innerHTML = `<span class="grow">• ${FUENTES[key].dbName.replace('_DB.xlsx','')} <span class="pill err">no encontrado</span></span>`;
+          li.innerHTML = `<span class="grow">• ${key} <span class="pill err">no encontrado</span></span>`;
         }
         ulList.appendChild(li);
       }
     }catch(e){
       console.error("Error al renderizar listas:", e);
-      ul.innerHTML = `<li class="meta">Error al cargar o procesar <code>public_listas/index.json</code>.</li>`;
+      // Muestra el mensaje de error para ayudar a depurar si algo falla
+      ul.innerHTML = `<li class="meta">Error crítico al cargar <code>public_listas/index.json</code>.</li>`;
       return;
     }
 
