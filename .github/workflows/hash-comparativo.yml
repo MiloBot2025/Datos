@@ -29,21 +29,28 @@ jobs:
       - name: Setup Chrome (Selenium/IMSA)
         uses: browser-actions/setup-chrome@v1
 
-      - name: Install deps
+      - name: Install Python deps
         shell: bash
         run: |
           set -e
           python -m pip install --upgrade pip
-          pip install requests openpyxl selenium webdriver-manager jq
+          pip install requests openpyxl selenium webdriver-manager
+
+      - name: Install jq
+        shell: bash
+        run: |
+          set -e
+          sudo apt-get update
+          sudo apt-get install -y jq
 
       - name: Ensure public dirs and placeholders
         shell: bash
         run: |
           set -e
           mkdir -p public_db public_listas public_reports assets _db/hash _db/snapshots downloads
-          [ -f public_db/.gitkeep ]      || printf "" > public_db/.gitkeep
-          [ -f public_listas/.gitkeep ]  || printf "" > public_listas/.gitkeep
-          [ -f public_reports/.gitkeep ] || printf "" > public_reports/.gitkeep
+          : > public_db/.gitkeep
+          : > public_listas/.gitkeep
+          : > public_reports/.gitkeep
           [ -f public_listas/index.json ]  || echo "[]" > public_listas/index.json
           [ -f public_reports/index.json ] || echo "[]" > public_reports/index.json
 
@@ -69,9 +76,9 @@ jobs:
           fi
           echo "Dentro de ventana. Sigo..."
 
-      - name: Precheck all DBs are TODAY AR
+      - name: Precheck all DBs are TODAY (AR)
         id: precheck
-        if: steps.guard.outputs.skip != 'true'
+        if: ${{ steps.guard.outputs.skip != 'true' }}
         shell: bash
         run: |
           set -e
@@ -81,12 +88,12 @@ jobs:
           shopt -s nullglob
           metas=(public_db/*_DB.meta.json)
           if [ ${#metas[@]} -eq 0 ]; then
-            echo "No hay .meta.json → no salto."
+            echo "No hay metas → no salto."
             exit 0
           fi
           all_today=true
           for f in "${metas[@]}"; do
-            d=$(jq -r '.saved_at_ar // ""' "$f" 2>/dev/null | cut -c1-10 || true)
+            d=$(jq -r '.saved_at_ar // ""' "$f" | cut -c1-10 || true)
             echo "Meta $(basename "$f") -> saved_at_ar=$d"
             if [ "$d" != "$AR_TODAY" ]; then all_today=false; fi
           done
@@ -96,7 +103,7 @@ jobs:
           fi
 
       - name: Run script (descarga, SHA, DB pública, Stock V, difs)
-        if: steps.guard.outputs.skip != 'true' && steps.precheck.outputs.skip != 'true'
+        if: ${{ steps.guard.outputs.skip != 'true' && steps.precheck.outputs.skip != 'true' }}
         env:
           WORKDIR: ${{ github.workspace }}
           IMSA_PASSWORD: ${{ secrets.IMSA_PASSWORD }}
@@ -108,7 +115,7 @@ jobs:
           python hash_comparativo.py
 
       - name: Build indexes (commit time)
-        if: steps.guard.outputs.skip != 'true' && steps.precheck.outputs.skip != 'true'
+        if: ${{ steps.guard.outputs.skip != 'true' && steps.precheck.outputs.skip != 'true' }}
         shell: bash
         run: |
           python - <<'PY'
@@ -141,8 +148,7 @@ def build(dir_path: str, pattern: str, out_name: str):
         })
     items.sort(key=lambda x:x["mtime"], reverse=True)
     (root/out_name).write_text(
-        json.dumps(items, indent=2, ensure_ascii=False),
-        encoding="utf-8"
+        json.dumps(items, indent=2, ensure_ascii=False), encoding="utf-8"
     )
     print(f"{dir_path}/{out_name} con {len(items)} items")
 
@@ -151,7 +157,7 @@ build("public_listas", "*_ULTIMA.xlsx", "index.json")
 PY
 
       - name: List and commit (robusto)
-        if: steps.guard.outputs.skip != 'true' && steps.precheck.outputs.skip != 'true'
+        if: ${{ steps.guard.outputs.skip != 'true' && steps.precheck.outputs.skip != 'true' }}
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -179,6 +185,6 @@ PY
             exit 0
           fi
 
-          echo "Push rechazado. Intento rebase..."
+          echo "Push rechazado. Intento rebase…"
           git pull --rebase --autostash origin main || true
           git push origin HEAD:main || git push --force-with-lease origin HEAD:main
