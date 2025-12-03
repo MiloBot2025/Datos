@@ -833,3 +833,8 @@
 - Precios ↓: 0 | Suma Δ: 0
 - Nuevos: 895 | Eliminados: 0
 
+## IMSA
+- Precios ↑: 0 | Suma Δ: 0
+- Precios ↓: 0 | Suma Δ: 0
+- Nuevos: 2646 | Eliminados: 0
+
