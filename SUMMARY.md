@@ -2158,3 +2158,13 @@
 - Precios ↓: 0 | Suma Δ: 0
 - Nuevos: 920 | Eliminados: 0
 
+## Tevelam
+- Precios ↑: 0 | Suma Δ: 0
+- Precios ↓: 0 | Suma Δ: 0
+- Nuevos: 1198 | Eliminados: 0
+
+## Disco_Pro
+- Precios ↑: 0 | Suma Δ: 0
+- Precios ↓: 0 | Suma Δ: 0
+- Nuevos: 937 | Eliminados: 0
+
